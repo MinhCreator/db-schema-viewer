@@ -182,7 +182,7 @@ export function Landing({ onDiagramCreated, theme, themeMode, onToggleTheme }: L
                 {t("landing.importSchema")}
               </button>
               <a
-                href="https://github.com/maxgfr/db-schema-viewer"
+                href="https://github.com/MinhCreator/db-schema-viewer"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2.5 rounded-xl border border-border bg-card px-7 py-3.5 font-semibold text-foreground transition-all hover:border-amber-500/50 hover:bg-accent hover:scale-[1.02] active:scale-[0.98]"
@@ -346,7 +346,7 @@ export function Landing({ onDiagramCreated, theme, themeMode, onToggleTheme }: L
             </p>
             <div className="flex items-center gap-4">
               <a
-                href="https://github.com/maxgfr/db-schema-viewer"
+                href="https://github.com/MinhCreator/db-schema-viewer"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -355,7 +355,7 @@ export function Landing({ onDiagramCreated, theme, themeMode, onToggleTheme }: L
                 {t("landing.github")}
               </a>
               <a
-                href="https://github.com/maxgfr/db-schema-viewer"
+                href="https://github.com/MinhCreator/db-schema-viewer"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-amber-400"
