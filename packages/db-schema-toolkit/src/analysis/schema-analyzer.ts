@@ -79,9 +79,10 @@ export function computeMetrics(diagram: Diagram): SchemaMetrics {
 
   // Self references
   const selfReferenceSet = new Set<string>();
+  const tablesById = new Map(tables.map((t) => [t.id, t]));
   for (const rel of relationships) {
     if (rel.sourceTableId === rel.targetTableId) {
-      const table = tables.find((t) => t.id === rel.sourceTableId);
+      const table = tablesById.get(rel.sourceTableId);
       if (table) selfReferenceSet.add(table.name);
     }
   }
@@ -108,10 +109,18 @@ export function computeMetrics(diagram: Diagram): SchemaMetrics {
   };
 }
 
+/**
+ * Longest FK chain (in edges). Cycles are collapsed into strongly connected
+ * components (Tarjan, iterative); a component of n tables contributes a chain
+ * of n - 1 edges, and the longest path is then taken over the resulting DAG.
+ */
 function computeMaxFKDepth(diagram: Diagram): number {
-  // Build adjacency list: sourceTableId -> targetTableId[]
   const adjacency = new Map<string, string[]>();
+  const nodes = new Set<string>();
+  for (const table of diagram.tables) nodes.add(table.id);
   for (const rel of diagram.relationships) {
+    nodes.add(rel.sourceTableId);
+    nodes.add(rel.targetTableId);
     if (rel.sourceTableId === rel.targetTableId) continue;
     const existing = adjacency.get(rel.sourceTableId);
     if (existing) {
@@ -121,29 +130,78 @@ function computeMaxFKDepth(diagram: Diagram): number {
     }
   }
 
+  const discovery = new Map<string, number>();
+  const componentOf = new Map<string, number>();
+  // Longest chain starting anywhere in a component, indexed by component id.
+  // Tarjan emits components in reverse topological order, so every successor
+  // component is already resolved when a component is emitted.
+  const componentDepth: number[] = [];
+  const stack: string[] = [];
+  const onStack = new Set<string>();
+  let counter = 0;
   let maxDepth = 0;
 
-  for (const table of diagram.tables) {
-    // BFS from this table
-    const visited = new Set<string>();
-    const queue: { id: string; depth: number }[] = [
-      { id: table.id, depth: 0 },
-    ];
-    visited.add(table.id);
+  interface Frame {
+    id: string;
+    neighbors: string[];
+    next: number;
+    index: number;
+    low: number;
+  }
 
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      if (current.depth > maxDepth) {
-        maxDepth = current.depth;
+  const open = (id: string): Frame => {
+    const index = counter++;
+    discovery.set(id, index);
+    stack.push(id);
+    onStack.add(id);
+    return { id, neighbors: adjacency.get(id) ?? [], next: 0, index, low: index };
+  };
+
+  for (const start of nodes) {
+    if (discovery.has(start)) continue;
+    const work: Frame[] = [open(start)];
+
+    while (work.length > 0) {
+      const frame = work[work.length - 1]!;
+      const neighbor = frame.neighbors[frame.next];
+      if (neighbor !== undefined) {
+        frame.next += 1;
+        const seen = discovery.get(neighbor);
+        if (seen === undefined) {
+          work.push(open(neighbor));
+        } else if (onStack.has(neighbor)) {
+          frame.low = Math.min(frame.low, seen);
+        }
+        continue;
       }
 
-      const neighbors = adjacency.get(current.id) ?? [];
-      for (const neighbor of neighbors) {
-        if (!visited.has(neighbor)) {
-          visited.add(neighbor);
-          queue.push({ id: neighbor, depth: current.depth + 1 });
+      work.pop();
+      const parent = work[work.length - 1];
+      if (parent) parent.low = Math.min(parent.low, frame.low);
+      if (frame.low !== frame.index) continue;
+
+      const componentId = componentDepth.length;
+      const members: string[] = [];
+      let member: string | undefined;
+      do {
+        member = stack.pop();
+        if (member === undefined) break;
+        onStack.delete(member);
+        componentOf.set(member, componentId);
+        members.push(member);
+      } while (member !== frame.id);
+
+      let longestExit = 0;
+      for (const id of members) {
+        for (const target of adjacency.get(id) ?? []) {
+          const targetComponent = componentOf.get(target);
+          if (targetComponent === undefined || targetComponent === componentId) continue;
+          longestExit = Math.max(longestExit, 1 + (componentDepth[targetComponent] ?? 0));
         }
       }
+      const depth = members.length - 1 + longestExit;
+      componentDepth.push(depth);
+      maxDepth = Math.max(maxDepth, depth);
     }
   }
 
@@ -247,7 +305,10 @@ export function detectAntiPatterns(diagram: Diagram): AntiPattern[] {
   // 4. Naming - snake_case inconsistency (within same table)
   for (const table of diagram.tables) {
     const camelFields = table.fields.filter((f) => isCamelCase(f.name));
-    const snakeFields = table.fields.filter((f) => isSnakeCase(f.name));
+    // Single-word names such as "id" fit both conventions, so they do not count.
+    const snakeFields = table.fields.filter(
+      (f) => f.name.includes("_") && isSnakeCase(f.name)
+    );
     if (camelFields.length > 0 && snakeFields.length > 0) {
       patterns.push({
         id: nextAntiPatternId(),
@@ -338,8 +399,13 @@ export function detectAntiPatterns(diagram: Diagram): AntiPattern[] {
 
   // 8. Missing index on FK
   for (const table of diagram.tables) {
-    if (table.indexes.length === 0) continue;
     const indexedColumns = new Set<string>();
+    // A primary key indexes its leading column; a unique constraint its column.
+    const leadingPk = table.fields.find((f) => f.primaryKey);
+    if (leadingPk) indexedColumns.add(leadingPk.name.toLowerCase());
+    for (const field of table.fields) {
+      if (field.unique) indexedColumns.add(field.name.toLowerCase());
+    }
     for (const idx of table.indexes) {
       for (const col of idx.columns) {
         indexedColumns.add(col.toLowerCase());
@@ -364,7 +430,7 @@ export function detectAntiPatterns(diagram: Diagram): AntiPattern[] {
   // 9. Normalization hints (basic 1NF/2NF/3NF detection)
   // 1NF: detect potential multi-value columns (json, array, text with comma patterns in name)
   const multiValuePatterns = /^(tags|categories|items|values|list|roles|permissions|emails|phones|addresses|features|options|labels|keywords|skills|languages|interests|hobbies)$/i;
-  const multiValueTypePatterns = /\b(json|jsonb|array|text\[\]|varchar\[\]|_text|_varchar)\b/i;
+  const multiValueTypePatterns = /\b(json|jsonb|array|_text|_varchar)\b|\b(text|varchar)\[\]/i;
   for (const table of diagram.tables) {
     for (const field of table.fields) {
       if (multiValuePatterns.test(field.name) || multiValueTypePatterns.test(field.type)) {

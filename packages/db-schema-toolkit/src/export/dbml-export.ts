@@ -8,7 +8,9 @@ export function exportDiagramToDBML(diagram: Diagram): string {
   const lines: string[] = [];
 
   for (const table of diagram.tables) {
-    const keyword = table.isView ? "// View:" : "Table";
+    // DBML has no view syntax: views are emitted as a fully commented block.
+    const start = lines.length;
+    const keyword = table.isView ? "View:" : "Table";
     const schemaPrefix = table.schema ? `${table.schema}.` : "";
     lines.push(`${keyword} ${schemaPrefix}${table.name} {`);
 
@@ -38,18 +40,26 @@ export function exportDiagramToDBML(diagram: Diagram): string {
 
     if (table.comment) {
       lines.push("");
-      lines.push(`  Note: '${table.comment.replace(/'/g, "\\'")}'`);
+      lines.push(`  Note: ${dbmlString(table.comment)}`);
     }
 
     lines.push("}");
+    if (table.isView) {
+      for (let i = start; i < lines.length; i++) {
+        lines[i] = lines[i] ? `// ${lines[i]}` : "//";
+      }
+    }
     lines.push("");
   }
 
   // Relationships as standalone Ref lines
+  const tablesById = new Map(diagram.tables.map((t) => [t.id, t]));
   for (const rel of diagram.relationships) {
-    const srcTable = diagram.tables.find((t) => t.id === rel.sourceTableId);
-    const tgtTable = diagram.tables.find((t) => t.id === rel.targetTableId);
+    const srcTable = tablesById.get(rel.sourceTableId);
+    const tgtTable = tablesById.get(rel.targetTableId);
     if (!srcTable || !tgtTable) continue;
+    // Views are commented out, so a Ref to one would point at an unknown table.
+    if (srcTable.isView || tgtTable.isView) continue;
 
     const srcField = srcTable.fields.find((f) => f.id === rel.sourceFieldId);
     const tgtField = tgtTable.fields.find((f) => f.id === rel.targetFieldId);
@@ -91,8 +101,46 @@ function buildAttributes(field: {
   if (field.primaryKey) attrs.push("pk");
   if (field.unique && !field.primaryKey) attrs.push("unique");
   if (!field.nullable && !field.primaryKey) attrs.push("not null");
-  if (field.default) attrs.push(`default: '${field.default}'`);
-  if (field.comment) attrs.push(`note: '${field.comment.replace(/'/g, "\\'")}'`);
+  if (field.default) attrs.push(`default: ${formatDefault(field.default)}`);
+  if (field.comment) attrs.push(`note: ${dbmlString(field.comment)}`);
 
   return attrs;
+}
+
+/** DBML string literal: single-quoted with backslash escapes. */
+function dbmlString(value: string): string {
+  return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+}
+
+const SQL_VALUE_KEYWORDS = new Set([
+  "current_timestamp",
+  "current_date",
+  "current_time",
+  "localtimestamp",
+  "localtime",
+  "current_user",
+  "session_user",
+]);
+
+/**
+ * Format a default value for DBML: numbers, booleans and null stay bare,
+ * quoted SQL strings become escaped DBML strings, and anything else that looks
+ * like an expression (function calls, casts, SQL keywords) goes in backticks.
+ */
+function formatDefault(raw: string): string {
+  const value = raw.trim();
+  if (/^-?\d+(\.\d+)?$/.test(value)) return value;
+  if (/^(true|false|null)$/i.test(value)) return value.toLowerCase();
+
+  const quoted = value.match(/^'((?:[^']|'')*)'$/) ?? value.match(/^"((?:[^"]|"")*)"$/);
+  if (quoted) {
+    const quote = value[0]!;
+    return dbmlString(quoted[1]!.split(quote + quote).join(quote));
+  }
+
+  if (/[()]|::|[+*/|]/.test(value) || SQL_VALUE_KEYWORDS.has(value.toLowerCase())) {
+    return `\`${value.replace(/`/g, "")}\``;
+  }
+
+  return dbmlString(value);
 }

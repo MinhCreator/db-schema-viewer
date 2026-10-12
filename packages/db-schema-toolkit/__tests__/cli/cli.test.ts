@@ -8,11 +8,15 @@ import { tmpdir } from "node:os";
 
 const CLI = join(import.meta.dirname, "../../dist/cli.js");
 
-function run(args: string[], { expectError }: { expectError?: boolean } = {}) {
+function run(
+  args: string[],
+  { expectError, input }: { expectError?: boolean; input?: string } = {}
+) {
   try {
     const stdout = execFileSync("node", [CLI, ...args], {
       encoding: "utf-8",
       timeout: 15_000,
+      ...(input !== undefined ? { input } : {}),
     });
     return { stdout, exitCode: 0 };
   } catch (err: unknown) {
@@ -405,6 +409,58 @@ describe("CLI", { timeout: 30000 }, () => {
       const content = require("node:fs").readFileSync(outFile, "utf-8");
       const diff = JSON.parse(content);
       expect(diff.removedTables).toContain("comments");
+    });
+  });
+
+  describe("argument parsing", () => {
+    it("does not let boolean flags consume the next argument", () => {
+      const { stdout } = run(["analyze", "--json", sqlFile]);
+      const analysis = JSON.parse(stdout);
+      expect(analysis.metrics.tableCount).toBe(3);
+    });
+
+    it("does not let --no-color consume the input file", () => {
+      const { stdout } = run(["info", "--no-color", sqlFile]);
+      expect(stdout).toContain("Tables: 3");
+    });
+
+    it("fails with exit 1 when --fail-under is not a number", () => {
+      const { exitCode, stderr } = run(["analyze", sqlFile, "--fail-under", "abc"], {
+        expectError: true,
+      });
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("--fail-under");
+    });
+
+    it("fails with exit 1 when --fail-under has no value", () => {
+      const { exitCode, stderr } = run(["analyze", sqlFile, "--json", "--fail-under"], {
+        expectError: true,
+      });
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("--fail-under");
+    });
+
+    it("honours --seed 0 instead of falling back to the default seed", () => {
+      const seedZero = run(["generate", sqlFile, "--rows", "3", "--seed", "0"]).stdout;
+      const shortSeedZero = run(["generate", sqlFile, "--rows", "3", "-s", "0"]).stdout;
+      const defaultSeed = run(["generate", sqlFile, "--rows", "3"]).stdout;
+      expect(shortSeedZero).toBe(seedZero);
+      expect(seedZero).not.toBe(defaultSeed);
+    });
+  });
+
+  describe("stdin", () => {
+    it("detects the format from content when --filename is absent", () => {
+      const { stdout } = run(["parse", "-"], { input: PRISMA_SCHEMA });
+      const diagram = JSON.parse(stdout);
+      const names = diagram.tables.map((t: { name: string }) => t.name).sort();
+      expect(names).toEqual(["Post", "User"]);
+    });
+
+    it("still parses SQL from stdin without --filename", () => {
+      const { stdout } = run(["parse", "-"], { input: SQL_SCHEMA });
+      const diagram = JSON.parse(stdout);
+      expect(diagram.tables).toHaveLength(3);
     });
   });
 });

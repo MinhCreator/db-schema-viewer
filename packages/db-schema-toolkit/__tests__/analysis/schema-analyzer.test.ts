@@ -173,6 +173,51 @@ describe("computeMetrics", () => {
     expect(metrics.maxDepth).toBe(2);
   });
 
+  function fkRel(source: DBTable, target: DBTable): DBRelationship {
+    return {
+      id: generateId(),
+      sourceTableId: source.id,
+      sourceFieldId: source.fields[0]!.id,
+      targetTableId: target.id,
+      targetFieldId: target.fields[0]!.id,
+      cardinality: "one-to-many",
+    };
+  }
+
+  function idTable(name: string): DBTable {
+    return makeTable(name, [makeField({ name: "id", type: "INT", primaryKey: true })]);
+  }
+
+  it("computes maxDepth as the longest FK chain, not the shortest path", () => {
+    const a = idTable("a");
+    const b = idTable("b");
+    const c = idTable("c");
+    // a -> b -> c is the longest chain; the shortcut a -> c must not hide it
+    const diagram = makeDiagram([a, b, c], [fkRel(a, c), fkRel(a, b), fkRel(b, c)]);
+    expect(computeMetrics(diagram).maxDepth).toBe(2);
+  });
+
+  it("computes maxDepth on a cycle without looping forever", () => {
+    const a = idTable("a");
+    const b = idTable("b");
+    const c = idTable("c");
+    const diagram = makeDiagram([a, b, c], [fkRel(a, b), fkRel(b, c), fkRel(c, a)]);
+    expect(computeMetrics(diagram).maxDepth).toBe(2);
+  });
+
+  it("counts the chain through a cycle into the tables beyond it", () => {
+    const x = idTable("x");
+    const a = idTable("a");
+    const b = idTable("b");
+    const c = idTable("c");
+    // x -> a <-> b -> c : longest simple chain x -> a -> b -> c
+    const diagram = makeDiagram(
+      [x, a, b, c],
+      [fkRel(x, a), fkRel(a, b), fkRel(b, a), fkRel(b, c)]
+    );
+    expect(computeMetrics(diagram).maxDepth).toBe(3);
+  });
+
   it("counts views separately", () => {
     const t1 = makeTable("users", [makeField({ name: "id", type: "INT" })]);
     const v1 = makeTable("user_view", [makeField({ name: "id", type: "INT" })], {
@@ -344,6 +389,47 @@ describe("detectAntiPatterns", () => {
     );
     expect(missingIdx.length).toBe(1);
     expect(missingIdx[0]!.severity).toBe("info");
+  });
+
+  it("detects missing index on FK when the table has no index at all", () => {
+    const table = makeTable("orders", [
+      makeField({ name: "id", type: "INT", primaryKey: true }),
+      makeField({ name: "user_id", type: "INT", isForeignKey: true }),
+    ]);
+    const patterns = detectAntiPatterns(makeDiagram([table]));
+
+    const missingIdx = patterns.filter(
+      (p) => p.category === "missing-index" && p.field === "user_id"
+    );
+    expect(missingIdx.length).toBe(1);
+  });
+
+  it("does not flag single-word fields such as id as snake_case in mixed naming", () => {
+    const table = makeTable("accounts", [
+      makeField({ name: "id", type: "INT", primaryKey: true }),
+      makeField({ name: "firstName", type: "TEXT" }),
+      makeField({ name: "lastName", type: "TEXT" }),
+    ]);
+    const patterns = detectAntiPatterns(makeDiagram([table]));
+
+    const mixed = patterns.filter(
+      (p) => p.category === "naming" && p.description.includes("mixes")
+    );
+    expect(mixed).toEqual([]);
+  });
+
+  it("flags text[] and varchar[] columns as potential 1NF violations", () => {
+    const table = makeTable("articles", [
+      makeField({ name: "id", type: "INT", primaryKey: true }),
+      makeField({ name: "topic_names", type: "text[]" }),
+      makeField({ name: "aliases", type: "VARCHAR[]" }),
+    ]);
+    const patterns = detectAntiPatterns(makeDiagram([table]));
+
+    const flagged = patterns
+      .filter((p) => p.category === "generic" && p.description.includes("1NF"))
+      .map((p) => p.field);
+    expect(flagged).toEqual(["topic_names", "aliases"]);
   });
 
   it("detects plural/singular table name inconsistency", () => {

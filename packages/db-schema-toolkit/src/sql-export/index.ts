@@ -48,34 +48,170 @@ function quoteIdentifier(name: string, dbType: DatabaseType): string {
   }
 }
 
-function generateCreateTable(table: DBTable, targetDb: DatabaseType): string {
-  const qName = table.schema
+const POSTGRES_FAMILY: readonly DatabaseType[] = ["postgresql", "supabase", "cockroachdb"];
+
+/** Placeholder enum type emitted by Prisma/Drizzle parsers when values are unknown, e.g. `ENUM(Status)`. */
+const VALUELESS_ENUM = /^ENUM\((\w+)\)$/i;
+
+/** Default markers meaning "the database generates this value" (Kysely `Generated<>`, Prisma `autoincrement()`). */
+function isGeneratedMarker(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const lower = value.trim().toLowerCase();
+  return lower === "auto" || lower === "autoincrement()";
+}
+
+function isIntegerType(type: string): boolean {
+  return /^(int|integer|smallint|bigint|tinyint|mediumint|int2|int4|int8)$/i.test(
+    type.replace(/\(.*\)/, "").trim(),
+  );
+}
+
+function isTemporalType(type: string): boolean {
+  return /^(timestamp|timestamptz|datetime|date|time)\b/i.test(type.trim());
+}
+
+function qualifiedName(table: DBTable, targetDb: DatabaseType): string {
+  return table.schema
     ? `${quoteIdentifier(table.schema, targetDb)}.${quoteIdentifier(table.name, targetDb)}`
     : quoteIdentifier(table.name, targetDb);
+}
 
+interface ResolvedFK {
+  field: DBField;
+  targetTable: DBTable | undefined;
+  targetTableName: string;
+  targetFieldName: string;
+}
+
+/**
+ * Resolve each FK column of a table to its referenced table, preferring the
+ * diagram relationship (exact table identity) over the field's `references`
+ * name, then a same-schema table, then any table with that name.
+ */
+interface DiagramIndex {
+  tablesById: Map<string, DBTable>;
+  relationshipBySourceField: Map<string, Diagram["relationships"][number]>;
+}
+
+const diagramIndexes = new WeakMap<Diagram, DiagramIndex>();
+
+/** Lookup tables built once per diagram, so FK resolution stays linear on large schemas. */
+function indexDiagram(diagram: Diagram): DiagramIndex {
+  let index = diagramIndexes.get(diagram);
+  if (!index) {
+    const relationshipBySourceField = new Map<string, Diagram["relationships"][number]>();
+    for (const rel of diagram.relationships) {
+      const key = `${rel.sourceTableId}\u0000${rel.sourceFieldId}`;
+      if (!relationshipBySourceField.has(key)) relationshipBySourceField.set(key, rel);
+    }
+    index = { tablesById: new Map(diagram.tables.map((t) => [t.id, t])), relationshipBySourceField };
+    diagramIndexes.set(diagram, index);
+  }
+  return index;
+}
+
+function resolveForeignKeys(table: DBTable, diagram: Diagram): ResolvedFK[] {
+  const result: ResolvedFK[] = [];
+  const { tablesById, relationshipBySourceField } = indexDiagram(diagram);
+  for (const field of table.fields) {
+    if (!field.references) continue;
+    const rel = relationshipBySourceField.get(`${table.id}\u0000${field.id}`);
+    let targetTable = rel ? tablesById.get(rel.targetTableId) : undefined;
+    let targetFieldName = field.references.field;
+    if (targetTable && rel) {
+      targetFieldName = targetTable.fields.find((f) => f.id === rel.targetFieldId)?.name ?? targetFieldName;
+    } else {
+      const refName = field.references.table;
+      const candidates = diagram.tables.filter(
+        (t) => t.name === refName || (t.schema !== undefined && `${t.schema}.${t.name}` === refName),
+      );
+      targetTable = candidates.find((t) => t.schema === table.schema) ?? candidates[0];
+    }
+    result.push({
+      field,
+      targetTable,
+      targetTableName: field.references.table,
+      targetFieldName,
+    });
+  }
+  return result;
+}
+
+function referenceClause(fk: ResolvedFK, targetDb: DatabaseType): string {
+  const refTable = fk.targetTable
+    ? qualifiedName(fk.targetTable, targetDb)
+    : quoteIdentifier(fk.targetTableName, targetDb);
+  // BigQuery doesn't support ON DELETE/UPDATE actions
+  const cascade = targetDb === "bigquery" ? "" : " ON DELETE CASCADE ON UPDATE CASCADE";
+  return `REFERENCES ${refTable} (${quoteIdentifier(fk.targetFieldName, targetDb)})${cascade}`;
+}
+
+function columnType(field: DBField, targetDb: DatabaseType): string {
+  if (VALUELESS_ENUM.test(field.type.trim())) return mapType("TEXT", targetDb);
+  return mapType(field.type, targetDb);
+}
+
+function generateCreateTable(table: DBTable, diagram: Diagram, targetDb: DatabaseType): string {
   const lines: string[] = [];
-  lines.push(`CREATE TABLE ${qName} (`);
+  lines.push(`CREATE TABLE ${qualifiedName(table, targetDb)} (`);
 
   const fieldDefs: string[] = [];
-  const pks: string[] = [];
+  const pkFields = table.fields.filter((f) => f.primaryKey);
+  let inlinePrimaryKey = false;
 
   for (const field of table.fields) {
     const parts: string[] = [];
     parts.push(`  ${quoteIdentifier(field.name, targetDb)}`);
-    parts.push(mapType(field.type, targetDb));
 
-    if (field.primaryKey) pks.push(field.name);
-    if (!field.nullable) parts.push("NOT NULL");
+    const generated = isGeneratedMarker(field.default);
+    const autoIncrement = generated && isIntegerType(field.type);
+    let type = columnType(field, targetDb);
+    const suffixes: string[] = [];
+    let defaultClause = field.default && !generated ? `DEFAULT ${field.default}` : "";
+
+    if (autoIncrement) {
+      const base = field.type.replace(/\(.*\)/, "").trim().toUpperCase();
+      if (POSTGRES_FAMILY.includes(targetDb)) {
+        type = base === "BIGINT" || base === "INT8" ? "BIGSERIAL" : base === "SMALLINT" || base === "INT2" ? "SMALLSERIAL" : "SERIAL";
+      } else if (targetDb === "mysql" || targetDb === "mariadb") {
+        suffixes.push("AUTO_INCREMENT");
+      } else if (targetDb === "sqlite") {
+        if (field.primaryKey && pkFields.length === 1) {
+          type = "INTEGER PRIMARY KEY AUTOINCREMENT";
+          inlinePrimaryKey = true;
+        }
+      } else if (targetDb === "snowflake") {
+        suffixes.push("AUTOINCREMENT");
+      } else if (targetDb === "generic") {
+        suffixes.push("GENERATED BY DEFAULT AS IDENTITY");
+      }
+      // ClickHouse and BigQuery have no auto-increment columns.
+    } else if (generated && isTemporalType(field.type)) {
+      defaultClause = "DEFAULT CURRENT_TIMESTAMP";
+    }
+
+    parts.push(type);
+    if (!field.nullable && !(inlinePrimaryKey && field.primaryKey)) parts.push("NOT NULL");
     if (field.unique && !field.primaryKey) parts.push("UNIQUE");
-    if (field.default) parts.push(`DEFAULT ${field.default}`);
+    if (defaultClause) parts.push(defaultClause);
+    parts.push(...suffixes);
 
     fieldDefs.push(parts.join(" "));
   }
 
-  if (pks.length > 0) {
+  if (pkFields.length > 0 && !inlinePrimaryKey) {
     fieldDefs.push(
-      `  PRIMARY KEY (${pks.map((pk) => quoteIdentifier(pk, targetDb)).join(", ")})`
+      `  PRIMARY KEY (${pkFields.map((pk) => quoteIdentifier(pk.name, targetDb)).join(", ")})`
     );
+  }
+
+  // SQLite cannot add constraints with ALTER TABLE: declare FKs inline.
+  if (targetDb === "sqlite") {
+    for (const fk of resolveForeignKeys(table, diagram)) {
+      fieldDefs.push(
+        `  FOREIGN KEY (${quoteIdentifier(fk.field.name, targetDb)}) ${referenceClause(fk, targetDb)}`
+      );
+    }
   }
 
   lines.push(fieldDefs.join(",\n"));
@@ -84,27 +220,18 @@ function generateCreateTable(table: DBTable, targetDb: DatabaseType): string {
   return lines.join("\n");
 }
 
-function generateFK(
-  table: DBTable,
-  field: DBField,
-  targetDb: DatabaseType
-): string | null {
-  if (!field.references) return null;
-  const srcTable = quoteIdentifier(table.name, targetDb);
-  const srcCol = quoteIdentifier(field.name, targetDb);
-  const refTable = quoteIdentifier(field.references.table, targetDb);
-  const refCol = quoteIdentifier(field.references.field, targetDb);
-
-  // BigQuery doesn't support ON DELETE/UPDATE actions
-  const cascade = targetDb === "bigquery" ? "" : " ON DELETE CASCADE ON UPDATE CASCADE";
-
-  return `ALTER TABLE ${srcTable} ADD CONSTRAINT fk_${table.name}_${field.name} FOREIGN KEY (${srcCol}) REFERENCES ${refTable} (${refCol})${cascade};`;
+function generateFKs(table: DBTable, diagram: Diagram, targetDb: DatabaseType): string[] {
+  if (targetDb === "sqlite") return [];
+  return resolveForeignKeys(table, diagram).map((fk) => {
+    const constraint = `fk_${table.name}_${fk.field.name}`;
+    return `ALTER TABLE ${qualifiedName(table, targetDb)} ADD CONSTRAINT ${constraint} FOREIGN KEY (${quoteIdentifier(fk.field.name, targetDb)}) ${referenceClause(fk, targetDb)};`;
+  });
 }
 
 function generateIndexes(table: DBTable, targetDb: DatabaseType): string[] {
   const statements: string[] = [];
+  const tableName = qualifiedName(table, targetDb);
   for (const idx of table.indexes) {
-    const tableName = quoteIdentifier(table.name, targetDb);
     const cols = idx.columns.map((c) => quoteIdentifier(c, targetDb)).join(", ");
     const unique = idx.unique ? "UNIQUE " : "";
     const idxName = idx.name || `idx_${table.name}_${idx.columns.join("_")}`;
@@ -115,10 +242,10 @@ function generateIndexes(table: DBTable, targetDb: DatabaseType): string[] {
 
 function generateComments(table: DBTable, targetDb: DatabaseType): string[] {
   // COMMENT ON is only supported by PostgreSQL-family and Snowflake
-  if (!["postgresql", "supabase", "cockroachdb", "snowflake"].includes(targetDb)) return [];
+  if (![...POSTGRES_FAMILY, "snowflake"].includes(targetDb)) return [];
 
   const statements: string[] = [];
-  const tableName = quoteIdentifier(table.name, targetDb);
+  const tableName = qualifiedName(table, targetDb);
 
   if (table.comment) {
     statements.push(`COMMENT ON TABLE ${tableName} IS '${table.comment.replace(/'/g, "''")}';`);
@@ -133,43 +260,23 @@ function generateComments(table: DBTable, targetDb: DatabaseType): string[] {
   return statements;
 }
 
-function collectEnumTypes(diagram: Diagram): Map<string, string[]> {
-  const enums = new Map<string, string[]>();
+/** Enum type names referenced as `ENUM(Name)` whose values the diagram does not carry. */
+function collectValuelessEnums(diagram: Diagram): string[] {
+  const names = new Set<string>();
   for (const table of diagram.tables) {
     for (const field of table.fields) {
-      // Detect ENUM(TypeName) pattern from Prisma/Drizzle parsers
-      const enumMatch = field.type.match(/^ENUM\((\w+)\)$/i);
-      if (enumMatch) {
-        const enumName = enumMatch[1]!;
-        if (!enums.has(enumName)) {
-          enums.set(enumName, []);
-        }
-      }
+      const enumName = field.type.trim().match(VALUELESS_ENUM)?.[1];
+      if (enumName) names.add(enumName);
     }
   }
-  return enums;
-}
-
-function generateEnumTypes(enums: Map<string, string[]>, targetDb: DatabaseType): string[] {
-  if (enums.size === 0) return [];
-  // Only PostgreSQL-family supports CREATE TYPE ... AS ENUM
-  if (!["postgresql", "supabase", "cockroachdb"].includes(targetDb)) return [];
-
-  const statements: string[] = [];
-  for (const [enumName] of enums) {
-    // We don't have the actual enum values from the diagram, so generate a placeholder
-    statements.push(`CREATE TYPE ${quoteIdentifier(enumName, targetDb)} AS ENUM ();`);
-  }
-  return statements;
+  return [...names];
 }
 
 function generateViews(diagram: Diagram, targetDb: DatabaseType): string[] {
   const statements: string[] = [];
   for (const table of diagram.tables) {
     if (!table.isView) continue;
-    const qName = table.schema
-      ? `${quoteIdentifier(table.schema, targetDb)}.${quoteIdentifier(table.name, targetDb)}`
-      : quoteIdentifier(table.name, targetDb);
+    const qName = qualifiedName(table, targetDb);
     const cols = table.fields.map((f) => quoteIdentifier(f.name, targetDb)).join(", ");
     statements.push(`-- View: ${table.name} (columns: ${table.fields.map((f) => f.name).join(", ")})`);
     statements.push(`CREATE OR REPLACE VIEW ${qName} AS`);
@@ -188,29 +295,33 @@ export function exportDiagramToSQL(diagram: Diagram, targetDb?: DatabaseType): s
   parts.push(`-- Date: ${new Date().toISOString()}`);
   parts.push("");
 
-  // Enum types (PostgreSQL-family)
-  const enums = collectEnumTypes(diagram);
-  const enumStatements = generateEnumTypes(enums, db);
-  if (enumStatements.length > 0) {
-    parts.push("-- Enum types");
-    parts.push(...enumStatements);
+  // Enum types referenced without their values cannot be declared: export them as text.
+  const valuelessEnums = collectValuelessEnums(diagram);
+  if (valuelessEnums.length > 0) {
+    parts.push(`-- Enum types: values unknown, columns exported as ${mapType("TEXT", db)}`);
+    if (POSTGRES_FAMILY.includes(db)) {
+      // Template only: an enum without values cannot hold any data.
+      for (const name of valuelessEnums) {
+        parts.push(`-- CREATE TYPE ${quoteIdentifier(name, db)} AS ENUM (/* values */);`);
+      }
+    } else {
+      parts.push(`-- ${valuelessEnums.join(", ")}`);
+    }
     parts.push("");
   }
 
   // Create tables
   for (const table of diagram.tables) {
     if (table.isView) continue;
-    parts.push(generateCreateTable(table, db));
+    parts.push(generateCreateTable(table, diagram, db));
     parts.push("");
   }
 
   // Foreign keys
   const fkStatements: string[] = [];
   for (const table of diagram.tables) {
-    for (const field of table.fields) {
-      const fk = generateFK(table, field, db);
-      if (fk) fkStatements.push(fk);
-    }
+    if (table.isView) continue;
+    fkStatements.push(...generateFKs(table, diagram, db));
   }
   if (fkStatements.length > 0) {
     parts.push(...fkStatements);
