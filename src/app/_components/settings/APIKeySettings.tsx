@@ -6,11 +6,11 @@ import { toast } from "sonner";
 import { X, Key, Eye, EyeOff, Server, Loader2, Zap, Check, AlertTriangle, Search, Globe } from "lucide-react";
 import { useTranslation } from "@/lib/i18n/context";
 import {
-  loadAISettings,
+  loadAISettingsDraft,
   saveAISettings,
   clearAISettings,
   type AISettings,
-} from "@/lib/storage/cookie-storage";
+} from "@/lib/storage/ai-settings";
 import { querySchema } from "db-schema-toolkit/ai";
 
 /* ---------- Catalog types ---------- */
@@ -29,6 +29,7 @@ interface ProviderInfo {
   name: string;
   npm?: string;
   api?: string;
+  defaultModel?: string;
   models: Record<string, ModelInfo>;
 }
 
@@ -38,12 +39,11 @@ type ModelCatalog = Record<string, ProviderInfo>;
 
 const RECOMMENDED_PROVIDER_IDS = ["openai", "anthropic", "google", "mistral"];
 
-const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
-  openai: "gpt-4o",
-  anthropic: "claude-sonnet-4-6",
-  google: "gemini-2.5-flash",
-  mistral: "mistral-large-latest",
-};
+function defaultModelOf(provider: ProviderInfo | undefined): string | undefined {
+  if (!provider) return undefined;
+  if (provider.defaultModel && provider.models[provider.defaultModel]) return provider.defaultModel;
+  return Object.keys(provider.models)[0];
+}
 
 /* ---------- Component ---------- */
 
@@ -54,7 +54,7 @@ interface APIKeySettingsProps {
 export function APIKeySettings({ onClose }: APIKeySettingsProps) {
   const { t } = useTranslation();
   const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState("gpt-4o");
+  const [model, setModel] = useState("");
   const [providerId, setProviderId] = useState("openai");
   const [customEndpoint, setCustomEndpoint] = useState("");
   const [customModel, setCustomModel] = useState("");
@@ -63,42 +63,71 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
   const [isTesting, setIsTesting] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [language, setLanguage] = useState("English");
+  const [rememberKey, setRememberKey] = useState(true);
 
   // Catalog state
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
-  const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
+  const [catalogError, setCatalogError] = useState(false);
+  const [catalogAttempt, setCatalogAttempt] = useState(0);
 
   // Load saved settings
   useEffect(() => {
-    const saved = loadAISettings();
-    if (saved) {
-      setApiKey(saved.apiKey);
-      setModel(saved.model);
-      setProviderId(saved.providerId);
-      setCustomEndpoint(saved.customEndpoint ?? "");
-      setCustomModel(saved.customModel ?? "");
-      setUseCustomEndpoint(!!saved.customEndpoint);
-      setLanguage(saved.language ?? "English");
-    }
+    let cancelled = false;
+    loadAISettingsDraft()
+      .then((saved) => {
+        if (cancelled || !saved) return;
+        setApiKey(saved.apiKey);
+        setModel(saved.model);
+        setProviderId(saved.providerId);
+        setCustomEndpoint(saved.customEndpoint ?? "");
+        setCustomModel(saved.customModel ?? "");
+        setUseCustomEndpoint(!!saved.customEndpoint);
+        setLanguage(saved.language ?? "English");
+        setRememberKey(saved.rememberKey);
+      })
+      .catch((err) => {
+        console.error("Failed to load AI settings:", err);
+      });
+    return () => { cancelled = true; };
   }, []);
 
-  // Load catalog from models.json
+  // Load catalog from models.json (once per attempt; a failure waits for "Retry")
   useEffect(() => {
-    if (!catalog && !isLoadingCatalog) {
-      setIsLoadingCatalog(true);
-      const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
-      fetch(`${basePath}/models.json`)
-        .then((res) => res.json())
-        .then((data: ModelCatalog) => {
-          setCatalog(data);
-          setIsLoadingCatalog(false);
-        })
-        .catch((err) => {
-          console.error("Failed to load models catalog:", err);
-          setIsLoadingCatalog(false);
-        });
-    }
-  }, [catalog, isLoadingCatalog]);
+    let cancelled = false;
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+    fetch(`${basePath}/models.json`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<ModelCatalog>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setCatalog(data);
+        setCatalogError(false);
+        setIsLoadingCatalog(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("Failed to load models catalog:", err);
+        setCatalogError(true);
+        setIsLoadingCatalog(false);
+      });
+    return () => { cancelled = true; };
+  }, [catalogAttempt]);
+
+  const retryCatalog = useCallback(() => {
+    setIsLoadingCatalog(true);
+    setCatalogError(false);
+    setCatalogAttempt((n) => n + 1);
+  }, []);
+
+  // Pick the provider's default model once the catalog arrives and nothing is selected yet
+  useEffect(() => {
+    if (!catalog || model) return;
+    const fallback = defaultModelOf(catalog[providerId]);
+    if (fallback) setModel(fallback);
+  }, [catalog, providerId, model]);
 
   // Provider derived from catalog
   const selectedProvider = useMemo(() => {
@@ -175,15 +204,27 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
     };
   }, [apiKey, model, providerMeta, useCustomEndpoint, customEndpoint, customModel, language]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const settings = buildSettings();
-    saveAISettings(settings);
+    try {
+      await saveAISettings(settings, { rememberKey });
+    } catch (err) {
+      console.error("Failed to save AI settings:", err);
+      toast.error(err instanceof Error ? err.message : String(err));
+      return;
+    }
     toast.success(t("settings.saved"));
     onClose();
   };
 
-  const handleClear = () => {
-    clearAISettings();
+  const handleClear = async () => {
+    try {
+      await clearAISettings();
+    } catch (err) {
+      console.error("Failed to clear AI settings:", err);
+      toast.error(err instanceof Error ? err.message : String(err));
+      return;
+    }
     setApiKey("");
     setCustomEndpoint("");
     setCustomModel("");
@@ -249,7 +290,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
   }, [buildSettings, useCustomEndpoint, customEndpoint, customModel, t]);
 
   // Recommended model for the current provider
-  const recommendedModelId = DEFAULT_MODEL_BY_PROVIDER[providerId];
+  const recommendedModelId = selectedProvider?.defaultModel;
   const recommendedModel = recommendedModelId
     ? modelOptions.find((m) => m.id === recommendedModelId)
     : null;
@@ -364,6 +405,17 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                       <Loader2 className="h-4 w-4 animate-spin" />
                       {t("settings.loadingProviders")}
                     </div>
+                  ) : catalogError ? (
+                    <div role="alert" className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-400">
+                      <span>{t("settings.catalogError")}</span>
+                      <button
+                        type="button"
+                        onClick={retryCatalog}
+                        className="rounded-md border border-amber-500/40 px-2 py-1 text-xs font-medium hover:bg-amber-500/10"
+                      >
+                        {t("settings.retry")}
+                      </button>
+                    </div>
                   ) : (
                     <select
                       value={providerId}
@@ -372,16 +424,8 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                         setProviderId(newProviderId);
                         setSearchTerm("");
                         // Auto-select recommended model or first available
-                        const defaultModel = DEFAULT_MODEL_BY_PROVIDER[newProviderId];
-                        const provider = catalog?.[newProviderId];
-                        if (provider) {
-                          const models = Object.keys(provider.models);
-                          if (defaultModel && models.includes(defaultModel)) {
-                            setModel(defaultModel);
-                          } else if (models[0]) {
-                            setModel(models[0]);
-                          }
-                        }
+                        const defaultModel = defaultModelOf(catalog?.[newProviderId]);
+                        if (defaultModel) setModel(defaultModel);
                       }}
                       className="w-full rounded-lg border border-border bg-accent px-3 py-2 text-sm text-foreground focus:outline-none"
                     >
@@ -522,8 +566,20 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                 </button>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                {t("settings.cookieStorageInfo")}
+                {t("settings.keyStorageInfo")}
               </p>
+              <label className="mt-2 flex cursor-pointer items-start gap-2">
+                <input
+                  type="checkbox"
+                  checked={rememberKey}
+                  onChange={(e) => setRememberKey(e.target.checked)}
+                  className="mt-0.5 rounded border-border"
+                />
+                <span>
+                  <span className="block text-sm text-foreground">{t("settings.rememberKey")}</span>
+                  <span className="block text-xs text-muted-foreground">{t("settings.rememberKeyHint")}</span>
+                </span>
+              </label>
             </div>
 
             {/* Language */}
@@ -592,7 +648,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
               disabled={
                 useCustomEndpoint
                   ? !customEndpoint.trim() || !customModel.trim()
-                  : !apiKey.trim()
+                  : !apiKey.trim() || !model
               }
               className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
             >
