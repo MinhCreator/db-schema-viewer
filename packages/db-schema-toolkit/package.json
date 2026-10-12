@@ -7,7 +7,7 @@
   "author": "maxgfr",
   "repository": {
     "type": "git",
-    "url": "https://github.com/maxgfr/db-schema-viewer.git",
+    "url": "git+https://github.com/maxgfr/db-schema-viewer.git",
     "directory": "packages/db-schema-toolkit"
   },
   "homepage": "https://github.com/maxgfr/db-schema-viewer/tree/main/packages/db-schema-toolkit#readme",
@@ -57,7 +57,7 @@
     }
   },
   "bin": {
-    "db-schema-toolkit": "./dist/cli.js"
+    "db-schema-toolkit": "dist/cli.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
