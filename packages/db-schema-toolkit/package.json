@@ -35,24 +35,25 @@
   ],
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
+    "./package.json": "./package.json",
     "./export": {
-      "import": "./dist/export.js",
-      "types": "./dist/export.d.ts"
+      "types": "./dist/export.d.ts",
+      "import": "./dist/export.js"
     },
     "./analysis": {
-      "import": "./dist/analysis.js",
-      "types": "./dist/analysis.d.ts"
+      "types": "./dist/analysis.d.ts",
+      "import": "./dist/analysis.js"
     },
     "./ai": {
-      "import": "./dist/ai.js",
-      "types": "./dist/ai.d.ts"
+      "types": "./dist/ai.d.ts",
+      "import": "./dist/ai.js"
     },
     "./data": {
-      "import": "./dist/data.js",
-      "types": "./dist/data.d.ts"
+      "types": "./dist/data.d.ts",
+      "import": "./dist/data.js"
     }
   },
   "bin": {
@@ -66,9 +67,14 @@
     "llms.txt",
     "PROMPT.md"
   ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "dev:watch": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/ --max-warnings=0",
     "test": "vitest",
@@ -105,7 +111,6 @@
     }
   },
   "devDependencies": {
-    "oxc-parser": "^0.123.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
