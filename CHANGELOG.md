@@ -1,3 +1,21 @@
+# [1.3.0](https://github.com/maxgfr/db-schema-viewer/compare/v1.2.0...v1.3.0) (2026-10-12)
+
+
+### Bug Fixes
+
+* **toolkit:** correct exporters, schema analyzer and CLI flags ([507daf3](https://github.com/maxgfr/db-schema-viewer/commit/507daf3f5bce8f53321fdcaa672bf497d0e97fc0))
+* **toolkit:** harden schema parsers and resolve schema-qualified tables ([6d6101f](https://github.com/maxgfr/db-schema-viewer/commit/6d6101fd5ef94ace717a7776a56be5c17ea94eaf))
+* **toolkit:** realistic fake data and non-overlapping shuffle layout ([09e4b4b](https://github.com/maxgfr/db-schema-viewer/commit/09e4b4b1f9134e7bd02f640e312330e0aa3e4b29))
+* **web:** encrypt the AI key at rest and enforce a CSP on GitHub Pages ([232394a](https://github.com/maxgfr/db-schema-viewer/commit/232394a9343a4e6b8de28028aabd4bab45fb4b46))
+* **web:** keep tables on Backspace and export images with orphan relationships ([73d8feb](https://github.com/maxgfr/db-schema-viewer/commit/73d8febfbab3cc63f58d385736912ab5ba3458d8))
+* **web:** keyboard, screen reader and IME fixes across dialogs and panels ([a432366](https://github.com/maxgfr/db-schema-viewer/commit/a43236679214106dbf24123e97ede92de7eb568e))
+* **web:** never overwrite a local project when opening a link or file ([9bd4a05](https://github.com/maxgfr/db-schema-viewer/commit/9bd4a05304376c15bb20324b7c5bec0819dd269d))
+
+
+### Features
+
+* **web:** generate a slim model catalog with llm-models ([2da1f48](https://github.com/maxgfr/db-schema-viewer/commit/2da1f481eba960fb2d12aa3de62cd342a7f9c486))
+
 # [1.2.0](https://github.com/maxgfr/db-schema-viewer/compare/v1.1.13...v1.2.0) (2026-09-08)
 
 
