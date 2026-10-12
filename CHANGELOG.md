@@ -7,6 +7,15 @@
 * **toolkit:** use SQL column names from Drizzle schemas ([916d2d6](https://github.com/maxgfr/db-schema-viewer/commit/916d2d6c946833235e421818eec02d5580da7fd1))
 * **web:** keep each Web Worker on its own script behind the service worker ([4ad58b2](https://github.com/maxgfr/db-schema-viewer/commit/4ad58b2b25778bcb299278542f6ad7bb61b440f7))
 
+## [1.3.1](https://github.com/maxgfr/db-schema-viewer/compare/v1.3.0...v1.3.1) (2026-10-12)
+
+
+### Bug Fixes
+
+* **toolkit:** read TypeORM join tables, column name options and merged FK columns ([9cd1d60](https://github.com/maxgfr/db-schema-viewer/commit/9cd1d60d5f990d33411586c063e951ab07c0a066))
+* **toolkit:** use SQL column names from Drizzle schemas ([916d2d6](https://github.com/maxgfr/db-schema-viewer/commit/916d2d6c946833235e421818eec02d5580da7fd1))
+* **web:** keep each Web Worker on its own script behind the service worker ([4ad58b2](https://github.com/maxgfr/db-schema-viewer/commit/4ad58b2b25778bcb299278542f6ad7bb61b440f7))
+
 # [1.3.0](https://github.com/maxgfr/db-schema-viewer/compare/v1.2.0...v1.3.0) (2026-10-12)
 
 
