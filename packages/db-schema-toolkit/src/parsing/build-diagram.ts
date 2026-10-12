@@ -83,10 +83,7 @@ function resolveRelationships(
   tables: DBTable[],
   parsedRelationships: ParsedRelationship[],
 ): DBRelationship[] {
-  const tableMap = new Map<string, DBTable>();
-  for (const t of tables) {
-    tableMap.set(t.name.toLowerCase(), t);
-  }
+  const lookup = createTableLookup(tables);
 
   const relationships: DBRelationship[] = [];
   const seen = new Set<string>();
@@ -115,9 +112,10 @@ function resolveRelationships(
 
   // 1. Explicit relationships first (may carry parser-specific cardinality)
   for (const rel of parsedRelationships) {
-    const sourceTable = tableMap.get(rel.sourceTable.toLowerCase());
-    const targetTable = tableMap.get(rel.targetTable.toLowerCase());
-    if (!sourceTable || !targetTable) continue;
+    const sourceTable = lookup(rel.sourceTable);
+    if (!sourceTable) continue;
+    const targetTable = lookup(rel.targetTable, sourceTable.schema);
+    if (!targetTable) continue;
 
     const sourceField = sourceTable.fields.find(
       (f) => f.name.toLowerCase() === rel.sourceColumn.toLowerCase(),
@@ -130,8 +128,14 @@ function resolveRelationships(
     // Mark field as FK when coming from DB-level constraints (not ORM-only relations)
     if (!sourceField.isForeignKey && !rel.isOrmOnly) {
       sourceField.isForeignKey = true;
+      // Qualify the name only when the bare name would resolve elsewhere from
+      // the source's schema, so unambiguous references keep their plain form.
+      const bareResolves = lookup(targetTable.name, sourceTable.schema) === targetTable;
       sourceField.references = {
-        table: targetTable.name,
+        table:
+          bareResolves || !targetTable.schema
+            ? targetTable.name
+            : `${targetTable.schema}.${targetTable.name}`,
         field: targetField.name,
       };
     }
@@ -144,7 +148,7 @@ function resolveRelationships(
     for (const field of table.fields) {
       if (!field.references) continue;
 
-      const targetTable = tableMap.get(field.references.table.toLowerCase());
+      const targetTable = lookup(field.references.table, table.schema);
       if (!targetTable) continue;
 
       const targetField = targetTable.fields.find(
@@ -157,4 +161,41 @@ function resolveRelationships(
   }
 
   return relationships;
+}
+
+/**
+ * Build a table resolver keyed by `schema.name` when a schema exists and by
+ * bare name otherwise. A reference resolves, in order, to:
+ *   1. the explicitly qualified table (`auth.users`);
+ *   2. the same name in `contextSchema` (the source table's schema);
+ *   3. the bare name (last table registered under it, as before);
+ *   4. for a qualified reference with no match, its unqualified part.
+ */
+function createTableLookup(
+  tables: DBTable[],
+): (reference: string, contextSchema?: string) => DBTable | undefined {
+  const byQualified = new Map<string, DBTable>();
+  const byName = new Map<string, DBTable>();
+  for (const t of tables) {
+    const name = t.name.toLowerCase();
+    byName.set(name, t);
+    if (t.schema) byQualified.set(`${t.schema.toLowerCase()}.${name}`, t);
+  }
+
+  return (reference, contextSchema) => {
+    const ref = reference.toLowerCase();
+    const explicit = byQualified.get(ref);
+    if (explicit) return explicit;
+
+    if (contextSchema) {
+      const sameSchema = byQualified.get(`${contextSchema.toLowerCase()}.${ref}`);
+      if (sameSchema) return sameSchema;
+    }
+
+    const bare = byName.get(ref);
+    if (bare) return bare;
+
+    const dot = ref.lastIndexOf(".");
+    return dot === -1 ? undefined : byName.get(ref.slice(dot + 1));
+  };
 }

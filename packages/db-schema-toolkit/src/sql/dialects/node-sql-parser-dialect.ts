@@ -2,33 +2,59 @@ import { stripSQLComments } from "../../parsing/strip-sql-comments";
 import sqlParser from "node-sql-parser";
 
 const { Parser } = sqlParser;
+const exprParser = new Parser();
 import type { DatabaseType } from "../../domain";
 import type { ParseResult, ParsedTable, ParsedColumn, ParsedIndex, ParsedRelationship } from "../../parsing/types";
 
 
-function preprocessSQL(sql: string, dbType: DatabaseType): string {
-  let processed = sql;
+/** Statements node-sql-parser can't handle and that carry no table structure. */
+const SKIPPED_STATEMENT =
+  /^(?:SET|PRAGMA|CREATE\s+EXTENSION|CREATE\s+TYPE|CREATE\s+SEQUENCE|COMMENT\s+ON)\b/i;
 
-  // Remove comments
-  processed = stripSQLComments(processed);
+/** Supabase dumps also carry function calls and privileges. */
+const SKIPPED_SUPABASE_STATEMENT = /^(?:SELECT|GRANT|REVOKE)\b/i;
 
-  // Remove SET statements that node-sql-parser can't handle
-  processed = processed.replace(/^\s*SET\s+[^;]+;/gim, "");
+const DOLLAR_QUOTE = /^(?:\$\$|\$[A-Za-z_]\w*\$)/;
 
-  // Remove PRAGMA statements (SQLite)
-  processed = processed.replace(/^\s*PRAGMA\s+[^;]+;/gim, "");
+/**
+ * Split SQL on `;` while ignoring semicolons inside quoted strings,
+ * quoted identifiers and PostgreSQL dollar-quoted bodies.
+ */
+function splitSQLStatements(sql: string): string[] {
+  const statements: string[] = [];
+  let start = 0;
+  let i = 0;
+  while (i < sql.length) {
+    const char = sql[i];
+    if (char === "'" || char === '"' || char === "`") {
+      i++;
+      while (i < sql.length) {
+        if (sql[i] === "\\" && char === "'") { i += 2; continue; }
+        if (sql[i] === char) {
+          if (sql[i + 1] === char) { i += 2; continue; }
+          i++; break;
+        }
+        i++;
+      }
+    } else if (char === "$" && !/\w/.test(sql[i - 1] ?? "") && DOLLAR_QUOTE.test(sql.slice(i))) {
+      const delimiter = sql.slice(i).match(DOLLAR_QUOTE)![0];
+      const end = sql.indexOf(delimiter, i + delimiter.length);
+      i = end === -1 ? sql.length : end + delimiter.length;
+    } else if (char === ";") {
+      statements.push(sql.slice(start, i));
+      i++;
+      start = i;
+    } else i++;
+  }
+  statements.push(sql.slice(start));
+  return statements.map((s) => s.trim()).filter((s) => s.length > 0);
+}
 
-  // Remove CREATE EXTENSION
-  processed = processed.replace(/^\s*CREATE\s+EXTENSION[^;]+;/gim, "");
+function preprocessStatement(stmt: string, dbType: DatabaseType): string | null {
+  if (SKIPPED_STATEMENT.test(stmt)) return null;
+  if (dbType === "supabase" && SKIPPED_SUPABASE_STATEMENT.test(stmt)) return null;
 
-  // Remove CREATE TYPE (PG enums) - node-sql-parser can't handle these
-  processed = processed.replace(/^\s*CREATE\s+TYPE[^;]+;/gim, "");
-
-  // Remove CREATE SEQUENCE
-  processed = processed.replace(/^\s*CREATE\s+SEQUENCE[^;]+;/gim, "");
-
-  // Remove COMMENT ON statements
-  processed = processed.replace(/^\s*COMMENT\s+ON[^;]+;/gim, "");
+  let processed = stmt;
 
   // ClickHouse preprocessing
   if (dbType === "clickhouse") {
@@ -48,19 +74,22 @@ function preprocessSQL(sql: string, dbType: DatabaseType): string {
     processed = processed.replace(/\bNullable\((\w+)\)/g, "$1");
   }
 
-  // Remove Supabase-specific function calls
-  if (dbType === "supabase") {
-    processed = processed.replace(/^\s*SELECT\s+[^;]+;/gim, "");
-    processed = processed.replace(/^\s*GRANT\s+[^;]+;/gim, "");
-    processed = processed.replace(/^\s*REVOKE\s+[^;]+;/gim, "");
-  }
-
   // CockroachDB - remove INTERLEAVE
   if (dbType === "cockroachdb") {
     processed = processed.replace(/\bINTERLEAVE\s+IN\s+PARENT\s+\w+\s*\([^)]*\)/gi, "");
   }
 
-  return processed.trim();
+  processed = processed.trim();
+  return processed.length > 0 ? processed : null;
+}
+
+function preprocessSQL(sql: string, dbType: DatabaseType): string[] {
+  const statements: string[] = [];
+  for (const stmt of splitSQLStatements(stripSQLComments(sql))) {
+    const processed = preprocessStatement(stmt, dbType);
+    if (processed !== null) statements.push(processed);
+  }
+  return statements;
 }
 
 function extractTableName(tableObj: any): string {
@@ -76,6 +105,13 @@ function extractSchema(tableObj: any): string | undefined {
   return undefined;
 }
 
+/** `schema.table` when the reference names a schema, so the FK can target it explicitly. */
+function extractReferencedTable(tableObj: any): string {
+  const table = extractTableName(tableObj);
+  const schema = extractSchema(tableObj);
+  return schema ? `${schema}.${table}` : table;
+}
+
 function extractColumnName(colDef: any): string {
   // Handle nested column ref: column.column.expr.value or column.column
   const col = colDef?.column;
@@ -89,11 +125,11 @@ function extractColumnName(colDef: any): string {
 function extractType(colDef: any): string {
   if (!colDef?.definition?.dataType) return "unknown";
   let type = colDef.definition.dataType;
-  if (colDef.definition.length) {
-    type += `(${colDef.definition.length})`;
-  }
-  if (colDef.definition.scale !== undefined && colDef.definition.precision !== undefined) {
-    type += `(${colDef.definition.precision}, ${colDef.definition.scale})`;
+  // node-sql-parser stores DECIMAL(p,s) as { length: p, scale: s }
+  const size = colDef.definition.length ?? colDef.definition.precision;
+  if (size) {
+    const scale = colDef.definition.scale;
+    type += typeof scale === "number" ? `(${size},${scale})` : `(${size})`;
   }
   // suffix is often an array in pg dialect
   if (colDef.definition.suffix && typeof colDef.definition.suffix === "string") {
@@ -121,12 +157,18 @@ function isUnique(colDef: any): boolean {
   return colDef?.unique === true || colDef?.unique_or_primary === "unique" || false;
 }
 
-function getDefault(colDef: any): string | undefined {
+function getDefault(colDef: any, dialect: string): string | undefined {
   if (!colDef?.default_val) return undefined;
   const val = colDef.default_val;
-  if (val.value?.value !== undefined) return String(val.value.value);
-  if (val.value?.name) return val.value.name;
   if (typeof val.value === "string") return val.value;
+  const literal = val.value?.value;
+  if (literal !== undefined && (literal === null || typeof literal !== "object")) {
+    return String(literal);
+  }
+  // Expressions such as now(), CURRENT_TIMESTAMP or casts: render them back to SQL
+  if (val.value && typeof val.value === "object") {
+    return exprParser.exprToSQL(val.value, { database: dialect });
+  }
   return undefined;
 }
 
@@ -141,7 +183,7 @@ function extractRefColumnName(refCol: any): string | undefined {
 function extractInlineFK(colDef: any): { table: string; column: string } | undefined {
   if (colDef?.reference_definition) {
     const ref = colDef.reference_definition;
-    const table = extractTableName(ref.table?.[0]);
+    const table = extractReferencedTable(ref.table?.[0]);
     const column = extractRefColumnName(ref.definition?.[0]) ?? extractRefColumnName(ref.columns?.[0]);
     if (table && column) {
       return { table, column };
@@ -155,18 +197,13 @@ export function parseWithNodeSqlParser(
   dialect: string,
   dbType: DatabaseType
 ): ParseResult {
-  const preprocessed = preprocessSQL(sql, dbType);
+  const statements = preprocessSQL(sql, dbType);
   const parser = new Parser();
 
   const tables: ParsedTable[] = [];
   const relationships: ParsedRelationship[] = [];
 
-  // Split into statements and parse individually for resilience
-  const statements = preprocessed
-    .split(";")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-
+  // Statements are parsed individually for resilience
   for (const stmt of statements) {
     try {
       const ast = parser.astify(`${stmt};`, {
@@ -179,7 +216,7 @@ export function parseWithNodeSqlParser(
         if (!node) continue;
 
         if (node.type === "create" && node.keyword === "table") {
-          const table = parseCreateTable(node);
+          const table = parseCreateTable(node, dialect);
           if (table) {
             tables.push(table);
             // Extract inline FK relationships
@@ -224,7 +261,7 @@ export function parseWithNodeSqlParser(
   return { tables, relationships };
 }
 
-function parseCreateTable(node: any): ParsedTable | null {
+function parseCreateTable(node: any, dialect: string): ParsedTable | null {
   const tableName = extractTableName(node.table?.[0]);
   const schema = extractSchema(node.table?.[0]);
   if (!tableName) return null;
@@ -243,7 +280,7 @@ function parseCreateTable(node: any): ParsedTable | null {
         primaryKey: isPrimaryKey(def),
         unique: isUnique(def),
         nullable: isNullable(def),
-        default: getDefault(def),
+        default: getDefault(def, dialect),
       };
 
       const inlineRef = extractInlineFK(def);
@@ -280,7 +317,7 @@ function parseCreateTable(node: any): ParsedTable | null {
     // Constraint: FOREIGN KEY
     if (def.resource === "constraint" && def.constraint_type === "FOREIGN KEY") {
       const fkCols = def.definition?.map((d: any) => extractRefColumnName(d) ?? d) ?? [];
-      const refTable = extractTableName(def.reference_definition?.table?.[0]);
+      const refTable = extractReferencedTable(def.reference_definition?.table?.[0]);
       const refCols = def.reference_definition?.definition?.map(
         (d: any) => extractRefColumnName(d) ?? d
       ) ?? [];
@@ -334,7 +371,7 @@ function parseAlterTable(node: any): ParsedRelationship[] {
       for (const def of defs) {
         if (def.constraint_type === "FOREIGN KEY") {
           const fkCols = def.definition?.map((d: any) => extractRefColumnName(d) ?? d) ?? [];
-          const refTable = extractTableName(
+          const refTable = extractReferencedTable(
             def.reference_definition?.table?.[0]
           );
           const refCols = def.reference_definition?.definition?.map(

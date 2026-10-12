@@ -88,7 +88,7 @@ function extractEntities(content: string): TypeORMEntity[] {
   const classBodies = resolveClassInheritance(content);
 
   const entityRegex =
-    /@Entity\s*\(\s*(?:["'`](\w+)["'`]|(\{[^}]*\}))?\s*\)\s*(?:export\s+)?class\s+(\w+)(?:\s+extends\s+(\w+))?/g;
+    /@Entity\s*\(\s*(?:["'`](\w+)["'`]|(\{[^}]*\}))?\s*\)\s*(?:@\w+(?:\s*\([^()]*(?:\([^()]*\)[^()]*)*\))?\s*)*(?:export\s+)?(?:default\s+)?class\s+(\w+)(?:\s+extends\s+(\w+))?/g;
 
   let match;
   while ((match = entityRegex.exec(content)) !== null) {
@@ -129,7 +129,11 @@ function extractEntities(content: string): TypeORMEntity[] {
     }
 
     const columns = parseEntityColumns(body);
-    const indexes = parseEntityIndexes(content, match.index);
+    const indexes = parseEntityIndexes(
+      content,
+      match.index,
+      match.index + match[0].length,
+    );
 
     entities.push({ className, tableName, columns, indexes });
   }
@@ -146,7 +150,7 @@ function parseEntityColumns(
   const columns: (ParsedColumn & { cardinality?: Cardinality })[] = [];
 
   const propertyRegex =
-    /((?:@\w+(?:\s*\([^)]*(?:\([^)]*\)[^)]*)*\))\s*)+)\s*(\w+)\s*(?:!|(?:\?))?\s*:\s*([^;]+);/g;
+    /((?:@\w+(?:\s*\([^()]*(?:\([^()]*\)[^()]*)*\))\s*)+)\s*(\w+)\s*(?:!|(?:\?))?\s*:\s*([^;\n]+);?/g;
 
   let match;
   while ((match = propertyRegex.exec(body)) !== null) {
@@ -309,12 +313,14 @@ function parseEntityColumns(
 function parseEntityIndexes(
   content: string,
   entityStart: number,
+  entityHeaderEnd: number,
 ): { name: string; columns: string[]; unique: boolean }[] {
   const indexes: { name: string; columns: string[]; unique: boolean }[] = [];
 
+  // Class-level @Index decorators may sit before @Entity or between it and `class`
   const before = content.substring(
     Math.max(0, entityStart - 500),
-    entityStart,
+    entityHeaderEnd,
   );
 
   const indexRegex =

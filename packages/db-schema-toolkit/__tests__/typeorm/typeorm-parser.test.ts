@@ -378,4 +378,57 @@ describe("parseTypeORMSchema", () => {
     expect(post.fields.find((f) => f.name === "title")).toBeDefined();
     expect(post.fields.find((f) => f.name === "createdAt")).toBeDefined();
   });
+
+  it("keeps entities with other decorators between @Entity and class", () => {
+    const content = `
+      @Entity("users")
+      @Index(["email"], { unique: true })
+      export class User {
+        @PrimaryGeneratedColumn()
+        id: number;
+
+        @Column()
+        email: string;
+      }
+
+      @Entity()
+      @Unique(["slug"])
+      export default class Post {
+        @PrimaryGeneratedColumn()
+        id: number;
+
+        @Column()
+        slug: string;
+      }
+    `;
+    const diagram = parseTypeORMSchema(content);
+
+    expect(diagram.tables.map((t) => t.name).sort()).toEqual(["Post", "users"]);
+    const users = diagram.tables.find((t) => t.name === "users")!;
+    expect(users.indexes).toEqual([
+      expect.objectContaining({ columns: ["email"], unique: true }),
+    ]);
+  });
+
+  it("parses properties declared without semicolons", () => {
+    const content = `
+      @Entity()
+      export class Account {
+        @PrimaryGeneratedColumn()
+        id: number
+
+        @Column({ nullable: true })
+        nickname: string
+
+        @Column()
+        active: boolean
+      }
+    `;
+    const diagram = parseTypeORMSchema(content);
+    const account = diagram.tables[0]!;
+
+    expect(account.fields.map((f) => f.name)).toEqual(["id", "nickname", "active"]);
+    expect(account.fields.find((f) => f.name === "nickname")!.nullable).toBe(true);
+    expect(account.fields.find((f) => f.name === "active")!.type).toBe("BOOLEAN");
+  });
 });

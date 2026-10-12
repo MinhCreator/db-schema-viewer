@@ -265,4 +265,71 @@ describe("parseDBMLSchema", () => {
     const uniqueIds = new Set(allIds);
     expect(uniqueIds.size).toBe(allIds.length);
   });
+
+  it("keeps // inside strings while stripping real comments", () => {
+    const dbml = `
+      Table links { // trailing comment
+        id integer [pk]
+        url varchar [default: 'https://example.com', note: 'see // docs']
+        /* block comment */
+        label varchar [note: "a /* not a comment */ b"]
+      }
+    `;
+    const diagram = parseDBMLSchema(dbml);
+
+    const links = diagram.tables[0]!;
+    expect(links.fields.map((f) => f.name)).toEqual(["id", "url", "label"]);
+    const url = links.fields.find((f) => f.name === "url")!;
+    expect(url.default).toBe("https://example.com");
+    expect(url.comment).toBe("see // docs");
+  });
+
+  it("parses tables with header settings", () => {
+    const dbml = `
+      Table users [headercolor: #3498DB] {
+        id integer [pk]
+      }
+
+      Table posts as P [headercolor: #fff, note: 'Posts'] {
+        id integer [pk]
+        user_id integer [ref: > users.id]
+      }
+    `;
+    const diagram = parseDBMLSchema(dbml);
+
+    expect(diagram.tables.map((t) => t.name)).toEqual(["users", "posts"]);
+    expect(diagram.relationships).toHaveLength(1);
+  });
+
+  it("parses schema-qualified refs", () => {
+    const dbml = `
+      Table public.users {
+        id integer [pk]
+      }
+
+      Table public.posts {
+        id integer [pk]
+        user_id integer
+        editor_id integer [ref: > public.users.id]
+      }
+
+      Ref: public.posts.user_id > public.users.id
+      Ref {
+        public.users.id < public.posts.id
+      }
+    `;
+    const diagram = parseDBMLSchema(dbml);
+
+    const users = diagram.tables.find((t) => t.name === "users")!;
+    const posts = diagram.tables.find((t) => t.name === "posts")!;
+    expect(diagram.relationships).toHaveLength(3);
+    for (const rel of diagram.relationships) {
+      expect(rel.sourceTableId).toBe(posts.id);
+      expect(rel.targetTableId).toBe(users.id);
+    }
+    const fkNames = diagram.relationships
+      .map((rel) => posts.fields.find((f) => f.id === rel.sourceFieldId)!.name)
+      .sort();
+    expect(fkNames).toEqual(["editor_id", "id", "user_id"]);
+  });
 });
