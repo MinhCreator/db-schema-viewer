@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Toaster } from "sonner";
 import { I18nWrapper } from "./_components/I18nWrapper";
+import { buildContentSecurityPolicy } from "@/lib/security/csp.mjs";
 import "./globals.css";
 
 
@@ -94,6 +95,10 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
+        <meta
+          httpEquiv="Content-Security-Policy"
+          content={buildContentSecurityPolicy({ dev: process.env.NODE_ENV !== "production", meta: true })}
+        />
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="min-h-screen bg-background font-sans antialiased">

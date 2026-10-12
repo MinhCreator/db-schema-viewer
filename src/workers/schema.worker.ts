@@ -1,3 +1,4 @@
+import "@/lib/zod-jitless";
 import { parseSchemaFile } from "db-schema-toolkit";
 
 self.onmessage = (event: MessageEvent<{ content: string; fileName?: string }>) => {
