@@ -20,9 +20,7 @@ jobs:
           node-version-file: ".node-version"
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 10
+        uses: pnpm/action-setup@v4
 
       - name: Get pnpm store directory
         shell: bash
@@ -41,7 +39,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .next/cache
-          key: ${{ runner.os }}-nextjs-${{ hashFiles('**/pnpm-lock.yaml') }}-${{ hashFiles('src/**') }}
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('**/pnpm-lock.yaml') }}-${{ hashFiles('src/**', 'packages/db-schema-toolkit/src/**') }}
           restore-keys: |
             ${{ runner.os }}-nextjs-${{ hashFiles('**/pnpm-lock.yaml') }}-
             ${{ runner.os }}-nextjs-
@@ -58,11 +56,14 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
+      # The package is built once above; the steps below reuse its dist/.
       - name: Test
-        run: pnpm run test:ci
+        run: |
+          pnpm --filter db-schema-toolkit test:ci
+          pnpm exec vitest run
 
       - name: Build static site with deployment base path
-        run: pnpm run build
+        run: pnpm exec next build
         env:
           NEXT_PUBLIC_BASE_PATH: /db-schema-viewer
 
