@@ -11,9 +11,11 @@ on:
       - main
   workflow_dispatch:
 
+# Queue instead of cancelling: a release build must finish even when a catalog
+# refresh lands right after it, or its semver tag is never pushed.
 concurrency:
   group: docker-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
