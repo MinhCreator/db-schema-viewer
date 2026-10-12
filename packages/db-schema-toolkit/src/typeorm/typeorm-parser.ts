@@ -4,11 +4,21 @@ import { buildDiagram } from "../parsing/build-diagram";
 import { extractBraceBlock } from "../parsing/extract-brace-block";
 import { resolveClassInheritance } from "../parsing/inline-helpers";
 
+type EntityColumn = ParsedColumn & { cardinality?: Cardinality };
+
+/** Owner side of a @ManyToMany with @JoinTable: the join table TypeORM creates. */
+interface JoinTableSpec {
+  propertyName: string;
+  targetClass: string;
+  options: string;
+}
+
 interface TypeORMEntity {
   className: string;
   tableName: string;
-  columns: (ParsedColumn & { cardinality?: Cardinality })[];
+  columns: EntityColumn[];
   indexes: { name: string; columns: string[]; unique: boolean }[];
+  joinTables: JoinTableSpec[];
 }
 
 /**
@@ -23,6 +33,8 @@ export function parseTypeORMSchema(content: string, name?: string): Diagram {
   for (const entity of entities) {
     classToTable.set(entity.className, entity.tableName);
   }
+
+  entities.push(...buildJoinTables(entities, classToTable));
 
   // Convert to shared types, resolving class names to table names
   const parsedTables = entities.map((entity) => ({
@@ -128,14 +140,14 @@ function extractEntities(content: string): TypeORMEntity[] {
       }
     }
 
-    const columns = parseEntityColumns(body);
+    const { columns, joinTables } = parseEntityColumns(body);
     const indexes = parseEntityIndexes(
       content,
       match.index,
       match.index + match[0].length,
     );
 
-    entities.push({ className, tableName, columns, indexes });
+    entities.push({ className, tableName, columns, indexes, joinTables });
   }
 
   return entities;
@@ -144,10 +156,11 @@ function extractEntities(content: string): TypeORMEntity[] {
 
 // ── Column parsing ─────────────────────────────────────────────────
 
-function parseEntityColumns(
-  body: string,
-): (ParsedColumn & { cardinality?: Cardinality })[] {
-  const columns: (ParsedColumn & { cardinality?: Cardinality })[] = [];
+function parseEntityColumns(body: string): { columns: EntityColumn[]; joinTables: JoinTableSpec[] } {
+  const columns: EntityColumn[] = [];
+  const joinTables: JoinTableSpec[] = [];
+  // A @ManyToOne join column often repeats as a plain @Column: merge them by name.
+  const byName = new Map<string, { column: EntityColumn; explicit: boolean }>();
 
   const propertyRegex =
     /((?:@\w+(?:\s*\([^()]*(?:\([^()]*\)[^()]*)*\))\s*)+)\s*(\w+)\s*(?:!|(?:\?))?\s*:\s*([^;\n]+);?/g;
@@ -157,6 +170,15 @@ function parseEntityColumns(
     const decorators = match[1]!;
     const fieldName = match[2]!;
     const tsType = match[3]!.trim();
+
+    const manyToMany = /@ManyToMany\s*\(\s*(?:\(\s*\)\s*=>\s*)?(\w+)/.exec(decorators);
+    if (manyToMany && /@JoinTable\s*\(/.test(decorators)) {
+      joinTables.push({
+        propertyName: fieldName,
+        targetClass: manyToMany[1]!,
+        options: decoratorArgs(decorators, "JoinTable") ?? "",
+      });
+    }
 
     // Skip relation fields that don't create columns
     const isRelation = /@(?:OneToMany|ManyToMany)\s*\(/.test(decorators);
@@ -213,6 +235,12 @@ function parseEntityColumns(
     if (isDateColumn) {
       colType = "TIMESTAMP";
       if (isDeleteDate) nullable = true;
+    }
+
+    // name option of the primary key and date decorators (@Column is handled below)
+    for (const decorator of ["PrimaryGeneratedColumn", "PrimaryColumn", "CreateDateColumn", "UpdateDateColumn", "DeleteDateColumn"]) {
+      const optionName = /\bname\s*:\s*["'`](\w+)["'`]/.exec(decoratorArgs(decorators, decorator) ?? "")?.[1];
+      if (optionName) columnName = optionName;
     }
 
     if (isColumn) {
@@ -293,7 +321,7 @@ function parseEntityColumns(
       }
     }
 
-    columns.push({
+    const column: EntityColumn = {
       name: columnName,
       type: colType,
       primaryKey: isPK,
@@ -302,10 +330,94 @@ function parseEntityColumns(
       default: defaultValue,
       references,
       cardinality,
+    };
+    const explicit = isColumn || isPK || isDateColumn;
+    const existing = byName.get(columnName);
+    if (!existing) {
+      byName.set(columnName, { column, explicit });
+      columns.push(column);
+      continue;
+    }
+    // The explicit @Column carries type and nullability; the relation carries the FK.
+    const primary = existing.explicit || !explicit ? existing.column : column;
+    const secondary = primary === column ? existing.column : column;
+    Object.assign(existing.column, {
+      ...primary,
+      primaryKey: primary.primaryKey || secondary.primaryKey,
+      unique: primary.unique || secondary.unique,
+      references: primary.references ?? secondary.references,
+      cardinality: primary.cardinality ?? secondary.cardinality,
     });
+    existing.explicit = existing.explicit || explicit;
   }
 
-  return columns;
+  return { columns, joinTables };
+}
+
+/** Raw arguments of the first `@Name(...)` in a decorator list. */
+function decoratorArgs(decorators: string, name: string): string | undefined {
+  const start = new RegExp(`@${name}\\s*\\(`).exec(decorators);
+  if (!start) return undefined;
+  let depth = 1;
+  const from = start.index + start[0].length;
+  for (let i = from; i < decorators.length; i++) {
+    const ch = decorators[i];
+    if (ch === "(") depth++;
+    else if (ch === ")" && --depth === 0) return decorators.slice(from, i);
+  }
+  return undefined;
+}
+
+// ── Join tables ────────────────────────────────────────────────────
+
+/** TypeORM's DefaultNamingStrategy camelCase: `questions_id` → `questionsId`. */
+function camelCase(value: string): string {
+  return value.replace(/_([a-z0-9])/gi, (_, c: string) => c.toUpperCase());
+}
+
+function joinColumnOption(options: string, key: "joinColumn" | "inverseJoinColumn", option: string): string | undefined {
+  const block = new RegExp(`\\b${key}\\s*:\\s*\\{([^}]*)\\}`).exec(options)?.[1];
+  return block ? new RegExp(`\\b${option}\\s*:\\s*["'\`](\\w+)["'\`]`).exec(block)?.[1] : undefined;
+}
+
+function buildJoinTables(entities: TypeORMEntity[], classToTable: Map<string, string>): TypeORMEntity[] {
+  const byClass = new Map(entities.map((e) => [e.className, e]));
+  const joins: TypeORMEntity[] = [];
+
+  for (const owner of entities) {
+    for (const spec of owner.joinTables) {
+      const target = byClass.get(spec.targetClass);
+      const targetTable = classToTable.get(spec.targetClass) ?? spec.targetClass;
+      const tableName = /\bname\s*:\s*["'`](\w+)["'`]/.exec(
+        spec.options.replace(/\b(?:joinColumn|inverseJoinColumn)\s*:\s*\{[^}]*\}/g, ""),
+      )?.[1] ?? `${owner.tableName}_${spec.propertyName}_${targetTable}`;
+
+      const side = (entity: TypeORMEntity | undefined, table: string, key: "joinColumn" | "inverseJoinColumn"): EntityColumn => {
+        const referenced = joinColumnOption(spec.options, key, "referencedColumnName")
+          ?? entity?.columns.find((c) => c.primaryKey)?.name
+          ?? "id";
+        const type = entity?.columns.find((c) => c.name === referenced)?.type ?? "INTEGER";
+        return {
+          name: joinColumnOption(spec.options, key, "name") ?? camelCase(`${table}_${referenced}`),
+          type,
+          primaryKey: true,
+          unique: false,
+          nullable: false,
+          references: { table, column: referenced },
+          cardinality: "one-to-many",
+        };
+      };
+
+      joins.push({
+        className: tableName,
+        tableName,
+        columns: [side(owner, owner.tableName, "joinColumn"), side(target, targetTable, "inverseJoinColumn")],
+        indexes: [],
+        joinTables: [],
+      });
+    }
+  }
+  return joins;
 }
 
 // ── Index parsing ──────────────────────────────────────────────────
