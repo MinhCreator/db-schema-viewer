@@ -149,3 +149,18 @@ test("malformed link stays usable and offline reload restores the project", asyn
   await expect(page.locator(".react-flow__node-table")).toHaveCount(3);
   await context.setOffline(false);
 });
+
+test("data worker keeps working once the service worker controls the page", async ({ page }) => {
+  await page.goto("./");
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
+  // The schema worker loads first, then the data worker reuses the same loader script.
+  await upload(page, "CREATE TABLE metrics (value INT, name TEXT);");
+  await expect(page.locator(".react-flow__node-table")).toHaveCount(1);
+  await page.getByRole("button", { name: "Data Explorer", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Data Explorer" })).toBeVisible();
+  const dump = "INSERT INTO metrics (value,name) VALUES " + Array.from({ length: 30 }, (_, i) => `(${i},'row_${i}')`).join(",") + ";";
+  await page.locator('input[type="file"]').setInputFiles({ name: "dump.sql", mimeType: "text/plain", buffer: Buffer.from(dump) });
+  await expect(page.getByText("30 rows", { exact: true })).toBeVisible();
+});
