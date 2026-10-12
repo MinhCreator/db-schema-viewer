@@ -41,8 +41,10 @@ it("cannot save a provider configuration without a model when the catalog failed
 it("saves the provider's default model from the catalog", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(catalog), { status: 200 })));
   renderSettings();
-  await screen.findAllByText("GPT B");
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  // The default model is picked in an effect after the catalog renders.
+  const save = screen.getByRole("button", { name: "Save" });
+  await waitFor(() => expect(save).toBeEnabled());
+  fireEvent.click(save);
   await waitFor(() => expect(saveAISettings).toHaveBeenCalledTimes(1));
   expect(vi.mocked(saveAISettings).mock.calls[0]![0].model).toBe("gpt-b");
 });
