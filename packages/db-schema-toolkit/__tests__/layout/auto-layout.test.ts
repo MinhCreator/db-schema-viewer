@@ -337,4 +337,20 @@ describe("shuffleLayout", () => {
     expect(result).toHaveLength(1);
     expect(result[0]!.id).toBe("only");
   });
+
+  it("never overlaps tables of different heights", () => {
+    const tables = [makeTable("a", 1), makeTable("b", 12), makeTable("c", 2), makeTable("d", 1), makeTable("e", 12), makeTable("f", 3)];
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const result = shuffleLayout(tables);
+      const boxes = result.map((t) => ({ x: t.x, y: t.y, w: 280, h: 80 + Math.min(t.fields.length, 12) * 28 }));
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+          const a = boxes[i]!;
+          const b = boxes[j]!;
+          const overlap = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+          expect(overlap).toBe(false);
+        }
+      }
+    }
+  });
 });

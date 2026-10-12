@@ -56,6 +56,8 @@ function extractEnumValues(sqlType: string): string[] | null {
 
 type ValueGenerator = (index: number) => string | number | boolean | null;
 
+const DATE_NAME_PATTERN = /(created|updated|deleted|modified|registered|published|expired|started|ended|logged|last_?login|last_?seen|birth|dob)(_?at|_?on|_?date|_?time)?$/i;
+
 /**
  * Determine the best value generator for a field based on its name and type.
  * Does NOT handle PK or FK logic — those are resolved in the main loop.
@@ -207,10 +209,14 @@ function getFieldGenerator(field: DBField): ValueGenerator {
   if (/^(timezone|tz|time_?zone)$/i.test(name)) {
     return () => faker.location.timeZone();
   }
+  // Timestamp suffixes win over flag prefixes: deleted_at, published_on, ...
+  if (/(_at|_on|_date|_time)$/i.test(name) && DATE_NAME_PATTERN.test(name)) {
+    return () => faker.date.between({ from: "2022-01-01", to: "2025-12-31" }).toISOString().replace("T", " ").slice(0, 19);
+  }
   if (/^(is_|has_|can_|allow|enabled|active|verified|deleted|published|archived|blocked|confirmed)/i.test(name)) {
     return () => faker.datatype.boolean({ probability: 0.7 });
   }
-  if (/(created|updated|deleted|modified|registered|published|expired|started|ended|logged|last_?login|last_?seen|birth|dob)(_?at|_?on|_?date|_?time)?$/i.test(name)) {
+  if (DATE_NAME_PATTERN.test(name)) {
     return () => faker.date.between({ from: "2022-01-01", to: "2025-12-31" }).toISOString().replace("T", " ").slice(0, 19);
   }
   if (/^(password|hash|password_?hash)$/i.test(name)) {
@@ -426,6 +432,8 @@ export function generateFakeData(
       }
     }
 
+    const singleColumnPk = table.fields.filter((f) => f.primaryKey).length === 1;
+
     for (let i = 0; i < rowCount; i++) {
       const row: ParsedRow = {};
 
@@ -436,7 +444,17 @@ export function generateFakeData(
 
         let value: string | number | boolean | null;
 
-        if (fkTarget && !field.primaryKey) {
+        if (fkTarget && field.primaryKey) {
+          // PK that is also an FK (1:1 extension tables, join tables): reuse parent keys,
+          // in order for a single-column key so the PK stays unique.
+          const parentValues = generatedValues.get(fkTarget.targetTableId)?.get(fkTarget.targetFieldId)
+            ?.filter((v): v is string | number | boolean => v !== null);
+          if (parentValues && parentValues.length > 0) {
+            value = singleColumnPk ? parentValues[i % parentValues.length]! : faker.helpers.arrayElement(parentValues);
+          } else {
+            value = isUuidType(field.type) ? faker.string.uuid() : i + 1;
+          }
+        } else if (fkTarget) {
           // FK field — pick from referenced table's already-generated values
           const targetValues = generatedValues.get(fkTarget.targetTableId)?.get(fkTarget.targetFieldId);
 
