@@ -190,10 +190,10 @@ describe("Fake data integration: example schema files", () => {
     it("generates realistic user data", () => {
       const users = data.find((t) => t.name === "users")!;
       for (const row of users.rows) {
-        // Drizzle uses camelCase column names (email, isVerified, createdAt)
+        // Columns carry their SQL names (email, is_verified, created_at)
         if (row.email !== null) expect(String(row.email)).toContain("@");
-        if (row.isVerified !== null) expect(typeof row.isVerified).toBe("boolean");
-        if (row.createdAt !== null) expect(String(row.createdAt)).toMatch(/^\d{4}-/);
+        if (row.is_verified !== null) expect(typeof row.is_verified).toBe("boolean");
+        if (row.created_at !== null) expect(String(row.created_at)).toMatch(/^\d{4}-/);
       }
     });
   });

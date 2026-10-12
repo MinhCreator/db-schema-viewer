@@ -67,6 +67,9 @@ export function parseDrizzleSchema(content: string, name?: string): Diagram {
   // Extract explicit relations (`relations(...)`)
   extractExplicitRelations(content, tables, relationships);
 
+  // Everything above is keyed by TypeScript property; the diagram shows SQL names.
+  applySqlColumnNames(tables, relationships);
+
   // Convert to Diagram via shared builder
   const parsedTables = tables.map((dt) => ({
     name: dt.tableName,
@@ -77,6 +80,34 @@ export function parseDrizzleSchema(content: string, name?: string): Diagram {
   }));
 
   return buildDiagram(parsedTables, relationships, databaseType, name ?? "Drizzle Schema");
+}
+
+// ── SQL column names ──────────────────────────────────────────────
+
+/** SQL name given as the first argument of the type call, e.g. `integer("author_id")`. */
+const sqlColumnNames = new WeakMap<ParsedColumn, string>();
+
+function applySqlColumnNames(tables: DrizzleTable[], relationships: ParsedRelationship[]): void {
+  const namesByTable = new Map(
+    tables.map((t) => [t.tableName, new Map(t.columns.map((c) => [c.name, sqlColumnNames.get(c) ?? c.name]))]),
+  );
+  const sqlName = (table: string, key: string) => namesByTable.get(table)?.get(key) ?? key;
+
+  for (const rel of relationships) {
+    rel.sourceColumn = sqlName(rel.sourceTable, rel.sourceColumn);
+    rel.targetColumn = sqlName(rel.targetTable, rel.targetColumn);
+  }
+  for (const table of tables) {
+    for (const index of table.indexes) {
+      index.columns = index.columns.map((key) => sqlName(table.tableName, key));
+    }
+    for (const column of table.columns) {
+      if (column.references) {
+        column.references = { ...column.references, column: sqlName(column.references.table, column.references.column) };
+      }
+      column.name = sqlName(table.tableName, column.name);
+    }
+  }
 }
 
 // ── Import stripping ──────────────────────────────────────────────
@@ -361,6 +392,8 @@ function buildColumn(
     nullable: !has("notNull") && !isPK,
     default: defaultValue,
   };
+  const sqlName = /^\s*["'`]([^"'`]+)["'`]/.exec(text.slice(typeOpenIdx + 1, typeCloseIdx))?.[1];
+  if (sqlName) sqlColumnNames.set(column, sqlName);
 
   // .references(() => table.column) or .references(() => table.column, { onDelete: ... })
   const refArgs = calls.find((c) => c.name === "references")?.args;
