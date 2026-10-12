@@ -22,7 +22,7 @@ import {
   Minus,
 } from "lucide-react";
 import type { Diagram } from "db-schema-toolkit";
-import { loadAISettings } from "@/lib/storage/cookie-storage";
+import { loadAISettings } from "@/lib/storage/ai-settings";
 import {
   querySchema,
   challengeSchema,
@@ -62,23 +62,39 @@ interface ChallengeHistoryEntry {
 }
 
 const CHALLENGE_HISTORY_KEY = "db-schema-viewer-challenge-history";
+/** Delay before revoking a download URL so Safari and Firefox can start the download first. */
+const REVOKE_DOWNLOAD_URL_DELAY_MS = 1000;
 
-function loadChallengeHistory(): ChallengeHistoryEntry[] {
+function challengeHistoryKey(diagramId: string): string {
+  return `${CHALLENGE_HISTORY_KEY}:${diagramId}`;
+}
+
+function loadChallengeHistory(diagramId: string): ChallengeHistoryEntry[] {
   try {
-    const raw = localStorage.getItem(CHALLENGE_HISTORY_KEY);
+    const raw = localStorage.getItem(challengeHistoryKey(diagramId));
     if (!raw) return [];
-    return JSON.parse(raw) as ChallengeHistoryEntry[];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ChallengeHistoryEntry[]) : [];
   } catch {
     return [];
   }
 }
 
-function saveChallengeEntry(entry: ChallengeHistoryEntry) {
-  const history = loadChallengeHistory();
+function saveChallengeEntry(diagramId: string, entry: ChallengeHistoryEntry) {
+  const history = loadChallengeHistory(diagramId);
   history.push(entry);
   // Keep last 20 entries
   const trimmed = history.slice(-20);
-  try { localStorage.setItem(CHALLENGE_HISTORY_KEY, JSON.stringify(trimmed)); } catch {}
+  try { localStorage.setItem(challengeHistoryKey(diagramId), JSON.stringify(trimmed)); } catch {}
+}
+
+function downloadText(content: string, type: string, fileName: string) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), REVOKE_DOWNLOAD_URL_DELAY_MS);
 }
 
 const QUICK_ACTIONS = [
@@ -103,6 +119,7 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
   const [showHistory, setShowHistory] = useState(false);
   const [challengeHistory, setChallengeHistory] = useState<ChallengeHistoryEntry[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const streamingTextRef = useRef("");
   useEffect(() => () => abortControllerRef.current?.abort(), []);
@@ -112,8 +129,18 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
   }, [messages, streamingText]);
 
   useEffect(() => {
-    setChallengeHistory(loadChallengeHistory());
-  }, []);
+    setChallengeHistory(loadChallengeHistory(diagram.id));
+  }, [diagram.id]);
+
+  // Move focus into the panel while it is shown and give it back to the opener afterwards.
+  useEffect(() => {
+    if (!visible) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => {
+      if (opener?.isConnected) opener.focus();
+    };
+  }, [visible]);
 
   const handleCopyMessage = useCallback((content: string) => {
     navigator.clipboard.writeText(content).then(() => {
@@ -132,7 +159,7 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
     const text = overrideInput ?? input;
     if (!text.trim() || isLoading) return;
 
-    const settings = loadAISettings();
+    const settings = await loadAISettings();
     if (!settings) {
       toast.error(t("common.configureApiKeyFirst"));
       return;
@@ -212,7 +239,7 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
   }, [input, isLoading, messages, diagram, t]);
 
   const handleChallenge = useCallback(async () => {
-    const settings = loadAISettings();
+    const settings = await loadAISettings();
     if (!settings || (!settings.apiKey && !settings.customEndpoint)) {
       toast.error(t("common.noAiConfigured"), {
         description: t("common.noAiConfiguredDesc"),
@@ -235,8 +262,8 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
         timestamp: new Date().toISOString(),
         schemaName: diagram.name,
       };
-      saveChallengeEntry(entry);
-      setChallengeHistory(loadChallengeHistory());
+      saveChallengeEntry(diagram.id, entry);
+      setChallengeHistory(loadChallengeHistory(diagram.id));
     } catch (err) {
       if ((err as Error)?.name !== "AbortError") toast.error(err instanceof Error ? err.message : t("ai.challengeFailed"));
     } finally {
@@ -248,13 +275,13 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
     if (!challengeResult) return;
     if (format === "md") {
       const lines: string[] = [];
-      lines.push(`# Schema Challenge Report`);
+      lines.push(`# ${t("ai.report.title")}`);
       lines.push("");
-      lines.push(`**Score:** ${challengeResult.overallScore}/100`);
+      lines.push(`**${t("ai.report.score")}:** ${challengeResult.overallScore}/100`);
       lines.push("");
-      lines.push(`**Summary:** ${challengeResult.summary}`);
+      lines.push(`**${t("ai.report.summary")}:** ${challengeResult.summary}`);
       lines.push("");
-      lines.push(`## Issues (${challengeResult.issues.length})`);
+      lines.push(`## ${t("ai.report.issues", { count: challengeResult.issues.length })}`);
       lines.push("");
       for (const issue of challengeResult.issues) {
         const icon = issue.severity === "critical" ? "🔴" : issue.severity === "warning" ? "🟡" : "🔵";
@@ -263,27 +290,13 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
         lines.push("");
         lines.push(issue.description);
         lines.push("");
-        lines.push(`> **Suggestion:** ${issue.suggestion}`);
+        lines.push(`> **${t("ai.report.suggestion")}:** ${issue.suggestion}`);
         lines.push("");
       }
-      const md = lines.join("\n");
-      const blob = new Blob([md], { type: "text/markdown" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "schema-challenge-report.md";
-      link.click();
-      URL.revokeObjectURL(url);
+      downloadText(lines.join("\n"), "text/markdown", "schema-challenge-report.md");
       toast.success(t("ai.reportExportedMd"));
     } else {
-      const json = JSON.stringify(challengeResult, null, 2);
-      const blob = new Blob([json], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "schema-challenge-report.json";
-      link.click();
-      URL.revokeObjectURL(url);
+      downloadText(JSON.stringify(challengeResult, null, 2), "application/json", "schema-challenge-report.json");
       toast.success(t("ai.reportExportedJson"));
     }
   }, [challengeResult, t]);
@@ -324,12 +337,17 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
       />
       <div className="pointer-events-none fixed inset-y-0 right-0 z-50 flex w-full max-w-lg">
         <div
-          className="pointer-events-auto flex w-full flex-col border-l border-border bg-card shadow-2xl"
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="ai-panel-title"
+          tabIndex={-1}
+          className="pointer-events-auto flex w-full flex-col border-l border-border bg-card shadow-2xl focus:outline-none"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <h2 className="text-lg font-bold text-foreground">{t("ai.title")}</h2>
+            <h2 id="ai-panel-title" className="text-lg font-bold text-foreground">{t("ai.title")}</h2>
             <button onClick={onClose} className="rounded-lg p-2 hover:bg-accent" aria-label={t("ai.closePanel")}>
               <X className="h-5 w-5 text-muted-foreground" />
             </button>
@@ -404,7 +422,7 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
                     {msg.role === "assistant" && (
                       <button
                         onClick={() => handleCopyMessage(msg.content)}
-                        className="absolute right-2 top-2 rounded p-1 opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100"
+                        className="absolute right-2 top-2 rounded p-1 opacity-0 transition-opacity hover:bg-accent focus-visible:opacity-100 group-hover:opacity-100"
                         title={t("common.copyMessage")}
                         aria-label={t("common.copyMessage")}
                       >
@@ -438,7 +456,9 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
                     type="text"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && !isLoading && handleSend()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.nativeEvent.isComposing && !isLoading) handleSend();
+                    }}
                     placeholder={t("ai.askPlaceholder")}
                     className="flex-1 rounded-lg border border-border bg-accent px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-indigo-500 focus:outline-none"
                     disabled={isLoading}
@@ -457,7 +477,7 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
                       onClick={() => handleSend()}
                       disabled={!input.trim()}
                       className="rounded-lg bg-indigo-600 px-3 py-2 text-white hover:bg-indigo-500 disabled:opacity-50"
-                      aria-label="Send message"
+                      aria-label={t("ai.sendMessage")}
                     >
                       <Send className="h-4 w-4" />
                     </button>
@@ -523,6 +543,7 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
                     <select
                       value={severityFilter}
                       onChange={(e) => setSeverityFilter(e.target.value as SeverityFilter)}
+                      aria-label={t("ai.severityFilter")}
                       className="rounded-lg border border-border bg-accent px-2 py-1 text-xs text-foreground focus:outline-none"
                     >
                       <option value="all">{t("ai.severity.all")}</option>
@@ -533,6 +554,7 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
                     <select
                       value={categoryFilter}
                       onChange={(e) => setCategoryFilter(e.target.value as CategoryFilter)}
+                      aria-label={t("ai.categoryFilter")}
                       className="rounded-lg border border-border bg-accent px-2 py-1 text-xs text-foreground focus:outline-none"
                     >
                       <option value="all">{t("ai.category.all")}</option>
@@ -608,6 +630,8 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
                       onClick={() => setShowHistory(!showHistory)}
                       className={`flex items-center gap-1 rounded-xl border border-border px-4 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground ${showHistory ? "bg-accent text-foreground" : ""}`}
                       title={t("ai.viewScoreHistory")}
+                      aria-label={t("ai.viewScoreHistory")}
+                      aria-pressed={showHistory}
                     >
                       <History className="h-3.5 w-3.5" />
                     </button>
@@ -615,6 +639,7 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
                       onClick={() => { setChallengeResult(null); setSeverityFilter("all"); setCategoryFilter("all"); }}
                       className="flex items-center gap-1 rounded-xl border border-border px-4 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
                       title={t("ai.clearChallengeResults")}
+                      aria-label={t("ai.clearChallengeResults")}
                     >
                       <RotateCcw className="h-3.5 w-3.5" />
                     </button>
@@ -634,7 +659,7 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
                           else { TrendIcon = Minus; trendColor = "text-muted-foreground"; }
 
                           return (
-                            <div key={i} className="flex items-center gap-2 text-xs">
+                            <div key={entry.timestamp} className="flex items-center gap-2 text-xs">
                               <span className="font-mono font-bold text-foreground">{entry.score}</span>
                               {prev && (
                                 <span className={`flex items-center gap-0.5 ${trendColor}`}>

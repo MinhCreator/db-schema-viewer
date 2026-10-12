@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useId } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { useTranslation } from "@/lib/i18n/context";
@@ -134,6 +134,24 @@ export function SchemaUpload({ onClose, onSQLParsed }: SchemaUploadProps) {
   const importController = useRef<AbortController | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   useEffect(() => () => importController.current?.abort(), []);
+  const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+
+  // Modal behaviour: take focus, close on Escape, give focus back to the opener.
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.isComposing) onCloseRef.current();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
 
   const submit = useCallback(async (read: () => Promise<string>, fileName?: string) => {
     importController.current?.abort();
@@ -201,7 +219,12 @@ export function SchemaUpload({ onClose, onSQLParsed }: SchemaUploadProps) {
       />
       <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-4">
         <div
-          className="animate-scale-in pointer-events-auto w-full max-w-lg rounded-2xl border border-border bg-card shadow-2xl"
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          tabIndex={-1}
+          className="animate-scale-in pointer-events-auto w-full max-w-lg rounded-2xl border border-border bg-card shadow-2xl focus:outline-none"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
@@ -218,7 +241,7 @@ export function SchemaUpload({ onClose, onSQLParsed }: SchemaUploadProps) {
                 </button>
               )}
               <div>
-                <h2 className="text-lg font-bold text-foreground">
+                <h2 id={titleId} className="text-lg font-bold text-foreground">
                   {t("upload.title")}
                 </h2>
                 <p className="text-xs text-muted-foreground">
@@ -230,7 +253,7 @@ export function SchemaUpload({ onClose, onSQLParsed }: SchemaUploadProps) {
             </div>
             <button
               onClick={onClose}
-              aria-label={t("project.cancel")}
+              aria-label={t("upload.close")}
               className="rounded-lg p-2 transition-colors hover:bg-accent"
             >
               <X className="h-5 w-5 text-muted-foreground" />
@@ -294,17 +317,20 @@ export function SchemaUpload({ onClose, onSQLParsed }: SchemaUploadProps) {
                   <p className="text-xs text-muted-foreground">
                     {t("upload.accepted", { extensions: formatOption.extensions })}
                   </p>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept={formatOption.accepts}
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) handleFile(file);
-                    }}
-                  />
                 </div>
+                {/* Outside the drop zone so its click does not bubble back into the zone. */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={formatOption.accepts}
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    // Reset so choosing the same file again still fires a change.
+                    e.target.value = "";
+                    if (file) handleFile(file);
+                  }}
+                />
 
                 {/* Paste section — always visible */}
                 <div className="space-y-3">
@@ -314,10 +340,11 @@ export function SchemaUpload({ onClose, onSQLParsed }: SchemaUploadProps) {
                       <button
                         type="button"
                         onClick={() => setShowExample(!showExample)}
+                        aria-expanded={showExample}
                         className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
                       >
                         <Info className="h-3.5 w-3.5" />
-                        {showExample ? t("upload.hide") : t("upload.show")}{t("upload.example")}
+                        {showExample ? t("upload.hideExample") : t("upload.showExample")}
                       </button>
                       {showExample && (
                         <pre className="mt-2 overflow-x-auto rounded-lg border border-border bg-accent/50 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">

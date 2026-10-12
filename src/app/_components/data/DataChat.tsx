@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { Send, Square, MessageSquare, Copy, RotateCcw } from "lucide-react";
 import type { ParsedDumpTable } from "db-schema-toolkit/data";
-import { loadAISettings } from "@/lib/storage/cookie-storage";
+import { loadAISettings } from "@/lib/storage/ai-settings";
 import { queryData } from "db-schema-toolkit/ai";
 import { MarkdownContent } from "../shared/MarkdownContent";
 import { useTranslation } from "@/lib/i18n/context";
@@ -53,12 +53,13 @@ export function DataChat({ tables, messages, onMessagesChange, chatKey }: DataCh
   const quickActions = isMultiTable ? MULTI_TABLE_ACTIONS : SINGLE_TABLE_ACTIONS;
 
   const contextLabel = useMemo(() => {
-    if (tables.length === 1) {
-      return `${tables[0]!.name}: ${tables[0]!.rows.length} rows, ${tables[0]!.columns.length} columns`;
+    const [only] = tables;
+    if (tables.length === 1 && only) {
+      return t("dataChat.contextSingle", { name: only.name, rows: only.rows.length, cols: only.columns.length });
     }
-    const totalRows = tables.reduce((sum, t) => sum + t.rows.length, 0);
-    return `${tables.length} tables, ${totalRows} total rows`;
-  }, [tables]);
+    const totalRows = tables.reduce((sum, table) => sum + table.rows.length, 0);
+    return t("dataChat.contextMulti", { count: tables.length, rows: totalRows });
+  }, [tables, t]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -81,7 +82,7 @@ export function DataChat({ tables, messages, onMessagesChange, chatKey }: DataCh
     const text = overrideInput ?? input;
     if (!text.trim() || isLoading) return;
 
-    const settings = loadAISettings();
+    const settings = await loadAISettings();
     if (!settings) {
       toast.error(t("common.configureApiKeyFirst"));
       return;
@@ -162,7 +163,7 @@ export function DataChat({ tables, messages, onMessagesChange, chatKey }: DataCh
 
   const placeholder = isMultiTable
     ? t("dataChat.askAllTables", { count: tables.length })
-    : t("dataChat.askAboutTable", { name: tables[0]?.name ?? "data" });
+    : t("dataChat.askAboutTable", { name: tables[0]?.name ?? t("dataChat.dataFallback") });
 
   return (
     <div className="flex h-full flex-col">
@@ -204,7 +205,7 @@ export function DataChat({ tables, messages, onMessagesChange, chatKey }: DataCh
             {msg.role === "assistant" && (
               <button
                 onClick={() => handleCopy(msg.content)}
-                className="absolute right-2 top-2 rounded p-1 opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100"
+                className="absolute right-2 top-2 rounded p-1 opacity-0 transition-opacity hover:bg-accent focus-visible:opacity-100 group-hover:opacity-100"
                 title={t("common.copyMessage")}
                 aria-label={t("common.copyMessage")}
               >
@@ -237,7 +238,9 @@ export function DataChat({ tables, messages, onMessagesChange, chatKey }: DataCh
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !isLoading && handleSend()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.nativeEvent.isComposing && !isLoading) handleSend();
+            }}
             placeholder={placeholder}
             className="flex-1 rounded-lg border border-border bg-accent px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-indigo-500 focus:outline-none"
             disabled={isActiveStream && isLoading}
@@ -256,7 +259,7 @@ export function DataChat({ tables, messages, onMessagesChange, chatKey }: DataCh
               onClick={() => handleSend()}
               disabled={!input.trim()}
               className="rounded-lg bg-indigo-600 px-3 py-2 text-white hover:bg-indigo-500 disabled:opacity-50"
-              aria-label="Send message"
+              aria-label={t("ai.sendMessage")}
             >
               <Send className="h-4 w-4" />
             </button>

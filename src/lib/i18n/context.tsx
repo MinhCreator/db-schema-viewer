@@ -52,13 +52,14 @@ function translate(
   key: string,
   params?: Record<string, string | number>,
 ): string {
-  let str = allTranslations[locale]?.[key] ?? allTranslations.en[key] ?? key;
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      str = str.replace(new RegExp(`\\{${k}\\}`, "g"), String(v));
-    }
-  }
-  return str;
+  const str = allTranslations[locale]?.[key] ?? allTranslations.en[key] ?? key;
+  if (!params) return str;
+  // One pass with a replacer function: values are inserted literally ("$&" in a
+  // table name stays as is) and placeholders inside a value are never expanded.
+  return str.replace(/\{(\w+)\}/g, (placeholder, name: string) => {
+    const value = Object.hasOwn(params, name) ? params[name] : undefined;
+    return value === undefined ? placeholder : String(value);
+  });
 }
 
 export function setGlobalLocale(locale: Locale) {

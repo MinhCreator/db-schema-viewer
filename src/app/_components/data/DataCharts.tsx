@@ -36,7 +36,7 @@ import {
 } from "recharts";
 import type { ParsedDumpTable } from "db-schema-toolkit/data";
 import { inferColumnTypes } from "db-schema-toolkit/data";
-import { loadAISettings } from "@/lib/storage/cookie-storage";
+import { loadAISettings } from "@/lib/storage/ai-settings";
 import {
   suggestCharts,
   generateCustomChart,
@@ -60,6 +60,18 @@ const COLORS = [
   "#14b8a6",
   "#06b6d4",
 ];
+
+// Suggestions carry no id; tag each object once so React keys survive removals and reorders.
+const suggestionKeys = new WeakMap<ChartSuggestion, string>();
+let nextSuggestionKey = 0;
+function suggestionKey(suggestion: ChartSuggestion): string {
+  let key = suggestionKeys.get(suggestion);
+  if (!key) {
+    key = `suggestion-${nextSuggestionKey++}`;
+    suggestionKeys.set(suggestion, key);
+  }
+  return key;
+}
 
 const CHART_TYPE_ICONS: Record<ChartType, typeof BarChart3> = {
   bar: BarChart3,
@@ -308,7 +320,7 @@ export function DataCharts({ table }: DataChartsProps) {
   }, [table]);
 
   const handleSuggestCharts = useCallback(async () => {
-    const settings = loadAISettings();
+    const settings = await loadAISettings();
     if (!settings || (!settings.apiKey && !settings.customEndpoint)) {
       toast.error(t("common.noAiConfigured"), {
         description: t("common.noAiConfiguredDesc"),
@@ -341,7 +353,7 @@ export function DataCharts({ table }: DataChartsProps) {
   const handleCustomChart = useCallback(async () => {
     if (!customPrompt.trim()) return;
 
-    const settings = loadAISettings();
+    const settings = await loadAISettings();
     if (!settings || (!settings.apiKey && !settings.customEndpoint)) {
       toast.error(t("common.noAiConfigured"), {
         description: t("common.noAiConfiguredDesc"),
@@ -381,9 +393,9 @@ export function DataCharts({ table }: DataChartsProps) {
   }, [customPrompt, table, columnTypes, update, t]);
 
   const handleRemoveSuggestion = useCallback(
-    (index: number) => {
+    (suggestion: ChartSuggestion) => {
       update((prev) => ({
-        aiSuggestions: prev.aiSuggestions.filter((_, i) => i !== index),
+        aiSuggestions: prev.aiSuggestions.filter((s) => s !== suggestion),
       }));
     },
     [update],
@@ -498,9 +510,9 @@ export function DataCharts({ table }: DataChartsProps) {
                   <option key={c} value={c}>
                     {c}{" "}
                     {columnTypes[c] === "number"
-                      ? "(num)"
+                      ? t("charts.numSuffix")
                       : columnTypes[c] === "date"
-                        ? "(date)"
+                        ? t("charts.dateSuffix")
                         : ""}
                   </option>
                 ))}
@@ -519,9 +531,9 @@ export function DataCharts({ table }: DataChartsProps) {
                   <option key={c} value={c}>
                     {c}{" "}
                     {columnTypes[c] === "number"
-                      ? "(num)"
+                      ? t("charts.numSuffix")
                       : columnTypes[c] === "date"
-                        ? "(date)"
+                        ? t("charts.dateSuffix")
                         : ""}
                   </option>
                 ))}
@@ -665,9 +677,9 @@ export function DataCharts({ table }: DataChartsProps) {
                 type="text"
                 value={customPrompt}
                 onChange={(e) => update({ customPrompt: e.target.value })}
-                onKeyDown={(e) =>
-                  e.key === "Enter" && !isLoadingCustom && handleCustomChart()
-                }
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing && !isLoadingCustom) handleCustomChart();
+                }}
                 placeholder={t("charts.describeChart")}
                 className="flex-1 rounded-lg border border-border bg-accent px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-indigo-500 focus:outline-none"
                 disabled={isLoadingCustom}
@@ -676,7 +688,7 @@ export function DataCharts({ table }: DataChartsProps) {
                 onClick={handleCustomChart}
                 disabled={!customPrompt.trim() || isLoadingCustom}
                 className="rounded-lg bg-indigo-600 px-3 py-2 text-white hover:bg-indigo-500 disabled:opacity-50"
-                aria-label="Generate custom chart"
+                aria-label={t("charts.generateCustom")}
               >
                 {isLoadingCustom ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -713,7 +725,7 @@ export function DataCharts({ table }: DataChartsProps) {
 
           {aiSuggestions.length > 0 && (
             <div className="grid gap-4 sm:grid-cols-2">
-              {aiSuggestions.map((suggestion, i) => {
+              {aiSuggestions.map((suggestion) => {
                 const data = processChartData(
                   table,
                   suggestion.xColumn,
@@ -723,7 +735,7 @@ export function DataCharts({ table }: DataChartsProps) {
                 const Icon = CHART_TYPE_ICONS[suggestion.type];
                 return (
                   <div
-                    key={i}
+                    key={suggestionKey(suggestion)}
                     className="group rounded-xl border border-border bg-accent/30 transition-colors hover:border-indigo-500/40"
                   >
                     {/* Card header */}
@@ -739,7 +751,7 @@ export function DataCharts({ table }: DataChartsProps) {
                           {suggestion.description}
                         </p>
                       </div>
-                      <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                      <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
                         <button
                           onClick={() => handleApplySuggestion(suggestion)}
                           className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -749,7 +761,7 @@ export function DataCharts({ table }: DataChartsProps) {
                           <BarChart3 className="h-3.5 w-3.5" />
                         </button>
                         <button
-                          onClick={() => handleRemoveSuggestion(i)}
+                          onClick={() => handleRemoveSuggestion(suggestion)}
                           className="rounded p-1 text-muted-foreground hover:bg-red-500/20 hover:text-red-400"
                           title={t("charts.removeChart")}
                           aria-label={t("charts.removeChart")}
@@ -771,7 +783,7 @@ export function DataCharts({ table }: DataChartsProps) {
                     {/* Footer */}
                     <div className="border-t border-border/50 px-3 py-1.5">
                       <p className="text-[10px] text-muted-foreground">
-                        {suggestion.xColumn} vs {suggestion.yColumn} &middot;{" "}
+                        {t("charts.xVsY", { x: suggestion.xColumn, y: suggestion.yColumn })} &middot;{" "}
                         {suggestion.aggregation} &middot;{" "}
                         {suggestion.reasoning}
                       </p>

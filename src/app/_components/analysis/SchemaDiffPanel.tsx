@@ -8,7 +8,7 @@ import { useTranslation } from "@/lib/i18n/context";
 import type { Diagram } from "db-schema-toolkit";
 import { diffSchemas, type SchemaDiff, type TableDiff, type FieldDiff } from "db-schema-toolkit/analysis";
 import { parseSchemaInput } from "@/lib/parsing/parse-input";
-import { loadAISettings } from "@/lib/storage/cookie-storage";
+import { loadAISettings } from "@/lib/storage/ai-settings";
 import { querySchema } from "db-schema-toolkit/ai";
 import { MarkdownContent } from "../shared/MarkdownContent";
 
@@ -18,15 +18,16 @@ interface SchemaDiffPanelProps {
 }
 
 function FieldDiffRow({ diff }: { diff: FieldDiff }) {
+  const { t } = useTranslation();
   return (
     <div className="ml-4 rounded-lg border border-amber-500/20 bg-amber-500/5 p-2">
       <div className="text-xs font-medium text-amber-400">{diff.fieldName}</div>
       {diff.changes.map((change, i) => (
         <div key={i} className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
           <span className="font-mono">{change.property}:</span>
-          <span className="text-red-400 line-through">{change.oldValue || "(empty)"}</span>
+          <span className="text-red-400 line-through">{change.oldValue || t("diff.empty")}</span>
           <ArrowRight className="h-3 w-3" />
-          <span className="text-emerald-400">{change.newValue || "(empty)"}</span>
+          <span className="text-emerald-400">{change.newValue || t("diff.empty")}</span>
         </div>
       ))}
     </div>
@@ -100,15 +101,25 @@ export function SchemaDiffPanel({ currentDiagram, onClose }: SchemaDiffPanelProp
   const [aiAnalysis, setAiAnalysis] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const newDiagramRef = useRef<Diagram | null>(null);
   const compareController = useRef<AbortController | null>(null);
   const aiController = useRef<AbortController | null>(null);
   const [isComparing, setIsComparing] = useState(false);
   useEffect(() => () => { compareController.current?.abort(); aiController.current?.abort(); }, []);
 
+  // Move focus into the dialog and give it back to the opener when it closes.
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => {
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
+
   const handleAIAnalysis = useCallback(async () => {
     if (!diff || !newDiagramRef.current) return;
-    const settings = loadAISettings();
+    const settings = await loadAISettings();
     if (!settings || (!settings.apiKey && !settings.customEndpoint)) {
       toast.error(t("common.noAiConfigured"), {
         description: t("common.noAiConfiguredDesc"),
@@ -141,12 +152,12 @@ export function SchemaDiffPanel({ currentDiagram, onClose }: SchemaDiffPanelProp
         currentDiagram,
         `I'm comparing two versions of my schema. Here is the diff:\n\n${diffSummary}\n\nPlease:\n1. Evaluate if this migration is safe\n2. Identify potential data loss risks\n3. Suggest the migration order\n4. Flag any breaking changes`,
         (chunk) => { if (!controller.signal.aborted) setAiAnalysis((prev) => prev + chunk); },
-        () => setIsAnalyzing(false),
+        () => { if (aiController.current === controller) setIsAnalyzing(false); },
         [],
         controller.signal,
       );
     } catch {
-      setIsAnalyzing(false);
+      if (aiController.current === controller) setIsAnalyzing(false);
       if (!controller.signal.aborted) toast.error(t("diff.aiAnalysisFailed"));
     }
   }, [diff, currentDiagram, t]);
@@ -172,6 +183,14 @@ export function SchemaDiffPanel({ currentDiagram, onClose }: SchemaDiffPanelProp
       if (!controller.signal.aborted) toast.error(t("diff.failedToParse"), { description: error instanceof Error ? error.message : undefined });
     } finally { if (compareController.current === controller) setIsComparing(false); }
   }, [currentDiagram, t]);
+
+  const handleCompareAnother = useCallback(() => {
+    aiController.current?.abort();
+    aiController.current = null;
+    setIsAnalyzing(false);
+    setDiff(null);
+    setAiAnalysis("");
+  }, []);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -199,13 +218,24 @@ export function SchemaDiffPanel({ currentDiagram, onClose }: SchemaDiffPanelProp
       />
       <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-4">
         <div
-          className="animate-scale-in pointer-events-auto w-full max-w-lg max-h-[80vh] flex flex-col rounded-2xl border border-border bg-card shadow-2xl"
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="schema-diff-title"
+          tabIndex={-1}
+          className="animate-scale-in pointer-events-auto w-full max-w-lg max-h-[80vh] flex flex-col rounded-2xl border border-border bg-card shadow-2xl focus:outline-none"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
           <div className="flex items-center justify-between border-b border-border px-6 py-4">
-            <h2 className="text-lg font-bold text-foreground">{t("diff.title")}</h2>
-            <button onClick={onClose} className="rounded-lg p-2 hover:bg-accent">
+            <h2 id="schema-diff-title" className="text-lg font-bold text-foreground">{t("diff.title")}</h2>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg p-2 hover:bg-accent"
+              aria-label={t("diff.close")}
+              title={t("diff.close")}
+            >
               <X className="h-5 w-5 text-muted-foreground" />
             </button>
           </div>
@@ -225,6 +255,15 @@ export function SchemaDiffPanel({ currentDiagram, onClose }: SchemaDiffPanelProp
                   onDragLeave={() => setIsDragging(false)}
                   onDrop={handleDrop}
                   onClick={() => fileInputRef.current?.click()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      fileInputRef.current?.click();
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  aria-describedby="schema-diff-formats"
                   className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-10 transition-colors ${
                     isDragging
                       ? "border-indigo-500 bg-indigo-500/10"
@@ -235,20 +274,22 @@ export function SchemaDiffPanel({ currentDiagram, onClose }: SchemaDiffPanelProp
                   <p className="text-sm font-medium text-foreground">
                     {t("diff.dropFile")}
                   </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p id="schema-diff-formats" className="mt-1 text-xs text-muted-foreground">
                     {t("diff.acceptedFormats")}
                   </p>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".sql,.txt,.ts,.js,.prisma,.dbml,.json"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) handleFile(file);
-                    }}
-                  />
                 </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".sql,.txt,.ts,.js,.prisma,.dbml,.json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    // Reset so choosing the same file again still fires a change event.
+                    e.target.value = "";
+                    if (file) handleFile(file);
+                  }}
+                />
               </>
             ) : (
               <>
@@ -353,7 +394,7 @@ export function SchemaDiffPanel({ currentDiagram, onClose }: SchemaDiffPanelProp
                 )}
 
                 <button
-                  onClick={() => { setDiff(null); setAiAnalysis(""); }}
+                  onClick={handleCompareAnother}
                   className="w-full rounded-xl border border-border py-2.5 text-sm font-medium text-muted-foreground hover:bg-accent"
                 >
                   {t("diff.compareAnother")}

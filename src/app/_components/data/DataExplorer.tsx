@@ -43,6 +43,9 @@ interface DataExplorerProps {
 	visible?: boolean;
 }
 
+const PAGE_SIZE = 50;
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+
 const TYPE_ICON: Record<InferredType, typeof Hash> = {
 	number: Hash,
 	string: Type,
@@ -91,11 +94,20 @@ function DataExplorerContent({
 
 	const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const dataController = useRef<AbortController | null>(null);
   const [isLoadingData, setIsLoadingData] = useState(false);
   useEffect(() => () => dataController.current?.abort(), []);
-	const PAGE_SIZE = 50;
-	const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+
+  // Move focus into the dialog while it is shown and give it back to the opener afterwards.
+  useEffect(() => {
+    if (!visible) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => {
+      if (opener?.isConnected) opener.focus();
+    };
+  }, [visible]);
 
 	// Per-table view state
 	const currentTableKey = selectedTable ?? "";
@@ -373,14 +385,19 @@ function DataExplorerContent({
 			/>
 			<div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-4">
 				<div
-					className="animate-scale-in pointer-events-auto flex max-h-[95vh] min-h-[95vh] w-full max-w-[90vw] flex-col rounded-2xl border border-border bg-card shadow-2xl"
+					ref={dialogRef}
+					role="dialog"
+					aria-modal="true"
+					aria-labelledby="data-explorer-title"
+					tabIndex={-1}
+					className="animate-scale-in pointer-events-auto flex max-h-[95vh] min-h-[95vh] w-full max-w-[90vw] flex-col rounded-2xl border border-border bg-card shadow-2xl focus:outline-none"
 					onClick={(e) => e.stopPropagation()}
 				>
 					{isLoadingData && <p role="status" className="px-6 py-2 text-sm text-muted-foreground">{t("project.importing")}</p>}
       {/* Header */}
 					<div className="flex items-center justify-between border-b border-border px-6 py-4">
 						<div className="flex items-center gap-3">
-							<h2 className="text-lg font-bold text-foreground">
+							<h2 id="data-explorer-title" className="text-lg font-bold text-foreground">
 								{t("data.title")}
 							</h2>
 							{dataSource !== "none" && (
@@ -405,8 +422,11 @@ function DataExplorerContent({
 						</div>
             <button className="ml-auto rounded-md px-3 py-2 text-sm hover:bg-accent" onClick={() => fileInputRef.current?.click()}>{t("data.uploadDump")}</button>
 						<button
+							type="button"
 							onClick={onClose}
 							className="rounded-lg p-2 hover:bg-accent"
+							aria-label={t("data.close")}
+							title={t("data.close")}
 						>
 							<X className="h-5 w-5 text-muted-foreground" />
 						</button>
@@ -420,6 +440,8 @@ function DataExplorerContent({
 										className="hidden"
 										onChange={(e) => {
 											const file = e.target.files?.[0];
+											// Reset so choosing the same file again still fires a change event.
+											e.target.value = "";
 											if (file) handleFile(file);
 										}}
 									/>
@@ -493,7 +515,7 @@ function DataExplorerContent({
 						</div>
 					) : (
 						<div
-							className="flex flex-1 overflow-hidden"
+							className="relative flex flex-1 overflow-hidden"
 							onDragOver={handleDragOver}
 							onDragLeave={handleDragLeave}
 							onDrop={handleDrop}
@@ -520,6 +542,7 @@ function DataExplorerContent({
                   disabled={isLoadingData}
 												className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
 												title={t("data.regenerateData")}
+												aria-label={t("data.regenerateData")}
 											>
 												<RefreshCw className="h-3.5 w-3.5" />
 											</button>
@@ -529,6 +552,7 @@ function DataExplorerContent({
 											onClick={handleClearData}
 											className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-red-400"
 											title={t("data.clearData")}
+											aria-label={t("data.clearData")}
 										>
 											<Trash2 className="h-3.5 w-3.5" />
 										</button>
@@ -554,22 +578,22 @@ function DataExplorerContent({
 											</span>
 										</button>
 									)}
-									{tables.map((t) => (
+									{tables.map((tbl) => (
 										<button
 											type="button"
-											key={t.name}
-											onClick={() => setSelectedTable(t.name)}
+											key={tbl.name}
+											onClick={() => setSelectedTable(tbl.name)}
 											className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
-												selectedTable === t.name
+												selectedTable === tbl.name
 													? "border-r-2 border-indigo-500 bg-indigo-500/10 text-foreground"
 													: "text-muted-foreground hover:bg-accent hover:text-foreground"
 											}`}
-											title={`${t.name} — ${t.rows.length} rows, ${t.columns.length} cols`}
+											title={t("data.tableTooltip", { name: tbl.name, rows: tbl.rows.length, cols: tbl.columns.length })}
 										>
 											<Table className="h-3.5 w-3.5 shrink-0" />
-											<span className="truncate">{t.name}</span>
+											<span className="truncate">{tbl.name}</span>
 											<span className="ml-auto shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-mono tabular-nums text-muted-foreground">
-												{t.rows.length}
+												{tbl.rows.length}
 											</span>
 										</button>
 									))}
@@ -625,7 +649,7 @@ function DataExplorerContent({
 											<span>{t("data.rows", { count: stats.rows })}</span>
 											<span className="text-border">&middot;</span>
 											<span className="flex items-center gap-1">
-												{stats.columns} cols
+												{t("data.colsCount", { count: stats.columns })}
 												{stats.numericCount > 0 && (
 													<span className="inline-flex items-center gap-0.5 text-blue-400">
 														<Hash className="h-2.5 w-2.5" />
@@ -725,7 +749,13 @@ function DataExplorerContent({
 																className="cursor-pointer border-b border-border/30 transition-colors hover:bg-accent/30"
 															>
 																<td className="whitespace-nowrap px-4 py-2 font-medium text-foreground">
-																	{t.name}
+																	<button
+																		type="button"
+																		onClick={(e) => { e.stopPropagation(); setSelectedTable(t.name); }}
+																		className="rounded text-left hover:underline focus-visible:outline-2 focus-visible:outline-indigo-500"
+																	>
+																		{t.name}
+																	</button>
 																</td>
 																<td className="whitespace-nowrap px-4 py-2 text-right font-mono text-blue-400/80">
 																	{t.rows.length}
@@ -752,13 +782,24 @@ function DataExplorerContent({
 															{currentTable.columns.map((col) => {
 																const colType = columnTypes[col] ?? "string";
 																const Icon = TYPE_ICON[colType];
+																const sortState =
+																	sortColumn === col && sortDirection === "asc"
+																		? "ascending"
+																		: sortColumn === col && sortDirection === "desc"
+																			? "descending"
+																			: undefined;
 																return (
 																	<th
 																		key={col}
-																		onClick={() => handleColumnSort(col)}
-																		className="cursor-pointer select-none whitespace-nowrap px-4 py-2 text-left font-medium text-foreground hover:bg-accent"
+																		scope="col"
+																		aria-sort={sortState}
+																		className="select-none whitespace-nowrap p-0 text-left font-medium text-foreground"
 																	>
-																		<span className="inline-flex items-center gap-1.5">
+																		<button
+																			type="button"
+																			onClick={() => handleColumnSort(col)}
+																			className="inline-flex w-full items-center gap-1.5 px-4 py-2 text-left font-medium hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-500"
+																		>
 																			<Icon
 																				className={`h-3 w-3 ${TYPE_COLOR[colType]}`}
 																			/>
@@ -771,7 +812,7 @@ function DataExplorerContent({
 																				sortDirection === "desc" && (
 																					<ChevronDown className="h-3 w-3 text-indigo-400" />
 																				)}
-																		</span>
+																		</button>
 																	</th>
 																);
 															})}
@@ -844,13 +885,13 @@ function DataExplorerContent({
 																			>
 																				{ci === 0 && !columnStats[col] ? (
 																					<span className="font-sans font-medium uppercase text-muted-foreground">
-																						{stat}
+																						{t(`data.stat.${stat}`)}
 																					</span>
 																				) : columnStats[col] ? (
 																					<span className="text-blue-400/80">
 																						{ci === 0 && (
 																							<span className="mr-2 font-sans font-medium uppercase text-muted-foreground">
-																								{stat}
+																								{t(`data.stat.${stat}`)}
 																							</span>
 																						)}
 																						{columnStats[col][stat]}
