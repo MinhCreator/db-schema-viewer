@@ -12,7 +12,7 @@ describe("built package consumed by Node", () => {
       cpSync("dist", join(dir, "dist"), { recursive: true });
       mkdirSync(join(dir, "node_modules"));
       const require = createRequire(import.meta.url);
-      for (const pkg of ["ai", "zod"]) {
+      for (const pkg of ["ai", "zod", "llm-connect"]) {
         symlinkSync(dirname(require.resolve(`${pkg}/package.json`)), join(dir, "node_modules", pkg), "dir");
       }
       expect(execFileSync(process.execPath, ["--input-type=module", "-e", "await import('./dist/ai.js'); console.log('ok')"], { cwd: dir, encoding: "utf8" }).trim()).toBe("ok");

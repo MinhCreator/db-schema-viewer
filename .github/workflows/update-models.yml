@@ -29,9 +29,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run fetch-models script
-        run: |
-          node ./scripts/fetch-models.mjs
+      - name: Build the model catalog
+        run: pnpm fetch-models
 
       - name: Commit and push updated catalog (if any)
         uses: maxgfr/github-commit-push-file@d030ec3e23928eb9158f07c6f9b89013345fc506 # v0.4.5

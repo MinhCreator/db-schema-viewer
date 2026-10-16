@@ -22,6 +22,7 @@ import {
   Minus,
 } from "lucide-react";
 import type { Diagram } from "db-schema-toolkit";
+import { isConfigured } from "llm-connect";
 import { loadAISettings } from "@/lib/storage/ai-settings";
 import {
   querySchema,
@@ -165,7 +166,7 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
       return;
     }
 
-    if (!settings.apiKey && !settings.customEndpoint) {
+    if (!isConfigured(settings)) {
       toast.error(t("common.noAiConfigured"), {
         description: t("common.noAiConfiguredDesc"),
       });
@@ -240,7 +241,7 @@ export function AIPanel({ diagram, onClose, visible = true }: AIPanelProps) {
 
   const handleChallenge = useCallback(async () => {
     const settings = await loadAISettings();
-    if (!settings || (!settings.apiKey && !settings.customEndpoint)) {
+    if (!settings || !isConfigured(settings)) {
       toast.error(t("common.noAiConfigured"), {
         description: t("common.noAiConfiguredDesc"),
       });

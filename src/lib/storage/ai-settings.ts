@@ -1,4 +1,5 @@
 import type { AISettings } from "db-schema-toolkit/ai";
+import { isConfigured, type SettingsStorage } from "llm-connect";
 
 export type { AISettings } from "db-schema-toolkit/ai";
 
@@ -197,7 +198,7 @@ export async function saveAISettings(settings: AISettings, { rememberKey }: Save
 export async function loadAISettings(): Promise<StoredAISettings | null> {
   const saved = await loadAISettingsDraft();
   // Settings exist if we have an API key OR a custom endpoint (local Ollama/LM Studio)
-  if (!saved || (!saved.apiKey && !saved.customEndpoint)) return null;
+  if (!saved || !isConfigured(saved)) return null;
   return saved;
 }
 
@@ -221,3 +222,11 @@ export async function clearAISettings(): Promise<void> {
   await idbDelete(API_KEY_ID);
   await idbDelete(CRYPTO_KEY_ID);
 }
+
+/** The storage above, for llm-connect's settings store. */
+export const aiSettingsStorage: SettingsStorage<{ language?: string }> = {
+  load: loadAISettings,
+  loadDraft: loadAISettingsDraft,
+  save: saveAISettings,
+  clear: clearAISettings,
+};

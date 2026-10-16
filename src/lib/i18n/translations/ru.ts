@@ -431,6 +431,7 @@ export const ru: Record<string, string> = {
   "settings.connectionSuccessful": "Подключение успешно!",
   "settings.enterApiKeyFirst": "Пожалуйста, сначала введите API-ключ",
   "settings.fillEndpointAndModel": "Пожалуйста, заполните URL эндпоинта и имя модели",
+  "settings.invalidEndpoint": "Введите корректный URL конечной точки http(s), например http://localhost:11434/v1",
   "settings.connectionFailed": "Ошибка подключения",
   "settings.connectionFailedCors": "Убедитесь, что сервер запущен и CORS включён. Для Ollama установите OLLAMA_ORIGINS=* перед запуском.",
   "settings.language": "Язык ответов ИИ",

@@ -1,4 +1,5 @@
-import { streamText, generateObject, type LanguageModel } from "ai";
+import { streamText, generateObject } from "ai";
+import { loadModel } from "llm-connect";
 import { z } from "zod";
 import type { AISettings } from "./types";
 import type { Diagram } from "../domain";
@@ -32,52 +33,6 @@ const ChallengeResponseSchema = z.object({
 });
 export type ChallengeResponse = z.infer<typeof ChallengeResponseSchema>;
 
-async function getModel(settings: AISettings): Promise<LanguageModel> {
-  const modelName = settings.customModel ?? settings.model;
-
-  if (settings.customEndpoint) {
-    // Custom/local endpoints (Ollama, LM Studio) only support Chat Completions API,
-    // not the OpenAI Responses API — use .chat() explicitly.
-    const { createOpenAI } = await import("@ai-sdk/openai");
-    const openai = createOpenAI({
-      apiKey: settings.apiKey || "",
-      baseURL: settings.customEndpoint,
-    });
-    return openai.chat(modelName);
-  }
-
-  switch (settings.providerNpm) {
-    case "@ai-sdk/anthropic": {
-      const { createAnthropic } = await import("@ai-sdk/anthropic");
-      const anthropic = createAnthropic({
-        apiKey: settings.apiKey,
-        headers: { "anthropic-dangerous-direct-browser-access": "true" },
-      });
-      return anthropic(modelName);
-    }
-    case "@ai-sdk/google": {
-      const { createGoogleGenerativeAI } = await import("@ai-sdk/google");
-      const google = createGoogleGenerativeAI({ apiKey: settings.apiKey });
-      return google(modelName);
-    }
-    case "@ai-sdk/mistral": {
-      const { createMistral } = await import("@ai-sdk/mistral");
-      const mistral = createMistral({ apiKey: settings.apiKey });
-      return mistral(modelName);
-    }
-    default: {
-      const { createOpenAI } = await import("@ai-sdk/openai");
-      // Other OpenAI-compatible providers may not support the Responses API,
-      // so use .chat() (Chat Completions) which is universally supported.
-      const openai = createOpenAI({
-        apiKey: settings.apiKey,
-        baseURL: settings.providerApi,
-      });
-      return openai.chat(modelName);
-    }
-  }
-}
-
 function languageInstruction(settings: AISettings): string {
   const lang = settings.language ?? "English";
   return `IMPORTANT: Always respond in ${lang}.`;
@@ -92,7 +47,7 @@ export async function querySchema(
   history: Array<{ prompt: string; response: string }> = [],
   abortSignal?: AbortSignal
 ): Promise<void> {
-  const model = await getModel(settings);
+  const model = await loadModel(settings);
   const schemaContext = schemaToPromptContext(diagram);
 
   const historyText = history
@@ -204,7 +159,7 @@ export async function suggestCharts(
   columnTypes: Record<string, string>,
   abortSignal?: AbortSignal,
 ): Promise<ChartSuggestion[]> {
-  const model = await getModel(settings);
+  const model = await loadModel(settings);
   const summary = summarizeTable(table, columnTypes);
 
   abortSignal?.throwIfAborted();
@@ -231,7 +186,7 @@ export async function generateCustomChart(
   userPrompt: string,
   abortSignal?: AbortSignal,
 ): Promise<ChartSuggestion | null> {
-  const model = await getModel(settings);
+  const model = await loadModel(settings);
   const summary = summarizeTable(table, columnTypes);
 
   abortSignal?.throwIfAborted();
@@ -265,7 +220,7 @@ export async function queryData(
   history: Array<{ prompt: string; response: string }> = [],
   abortSignal?: AbortSignal
 ): Promise<void> {
-  const model = await getModel(settings);
+  const model = await loadModel(settings);
 
   const tableSummaries = tables.map((table) => {
     const columnTypes = inferColumnTypes(table.columns, table.rows);
@@ -316,7 +271,7 @@ export async function challengeSchema(
   diagram: Diagram,
   abortSignal?: AbortSignal,
 ): Promise<ChallengeResponse> {
-  const model = await getModel(settings);
+  const model = await loadModel(settings);
   const schemaContext = schemaToPromptContext(diagram);
 
   abortSignal?.throwIfAborted();

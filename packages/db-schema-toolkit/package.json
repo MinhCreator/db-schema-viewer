@@ -84,14 +84,16 @@
     "zod": "^4.1.13",
     "node-sql-parser": "^5.3.6",
     "lz-string": "^1.5.0",
-    "@faker-js/faker": "^10.5.0"
+    "@faker-js/faker": "^10.5.0",
+    "llm-connect": "^1.0.1"
   },
   "peerDependencies": {
-    "ai": "^5.0.0",
-    "@ai-sdk/openai": "^2.0.0",
-    "@ai-sdk/anthropic": "^2.0.0",
-    "@ai-sdk/google": "^2.0.0",
-    "@ai-sdk/mistral": "^2.0.0"
+    "ai": "^6.0.0",
+    "@ai-sdk/openai": "^3.0.0",
+    "@ai-sdk/anthropic": "^3.0.0",
+    "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/mistral": "^3.0.0",
+    "@ai-sdk/openai-compatible": "^2.0.0"
   },
   "peerDependenciesMeta": {
     "ai": {
@@ -107,6 +109,9 @@
       "optional": true
     },
     "@ai-sdk/mistral": {
+      "optional": true
+    },
+    "@ai-sdk/openai-compatible": {
       "optional": true
     }
   },

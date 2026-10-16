@@ -4,6 +4,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { Send, Square, MessageSquare, Copy, RotateCcw } from "lucide-react";
 import type { ParsedDumpTable } from "db-schema-toolkit/data";
+import { isConfigured } from "llm-connect";
 import { loadAISettings } from "@/lib/storage/ai-settings";
 import { queryData } from "db-schema-toolkit/ai";
 import { MarkdownContent } from "../shared/MarkdownContent";
@@ -87,7 +88,7 @@ export function DataChat({ tables, messages, onMessagesChange, chatKey }: DataCh
       toast.error(t("common.configureApiKeyFirst"));
       return;
     }
-    if (!settings.apiKey && !settings.customEndpoint) {
+    if (!isConfigured(settings)) {
       toast.error(t("common.noAiConfigured"), {
         description: t("common.noAiConfiguredDesc"),
       });

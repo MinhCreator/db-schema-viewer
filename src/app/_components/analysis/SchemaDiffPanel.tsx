@@ -8,6 +8,7 @@ import { useTranslation } from "@/lib/i18n/context";
 import type { Diagram } from "db-schema-toolkit";
 import { diffSchemas, type SchemaDiff, type TableDiff, type FieldDiff } from "db-schema-toolkit/analysis";
 import { parseSchemaInput } from "@/lib/parsing/parse-input";
+import { isConfigured } from "llm-connect";
 import { loadAISettings } from "@/lib/storage/ai-settings";
 import { querySchema } from "db-schema-toolkit/ai";
 import { MarkdownContent } from "../shared/MarkdownContent";
@@ -120,7 +121,7 @@ export function SchemaDiffPanel({ currentDiagram, onClose }: SchemaDiffPanelProp
   const handleAIAnalysis = useCallback(async () => {
     if (!diff || !newDiagramRef.current) return;
     const settings = await loadAISettings();
-    if (!settings || (!settings.apiKey && !settings.customEndpoint)) {
+    if (!settings || !isConfigured(settings)) {
       toast.error(t("common.noAiConfigured"), {
         description: t("common.noAiConfiguredDesc"),
       });
