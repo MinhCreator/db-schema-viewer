@@ -1,3 +1,15 @@
+# [2.0.0](https://github.com/maxgfr/db-schema-viewer/compare/v1.3.1...v2.0.0) (2026-10-16)
+
+
+* feat(toolkit)!: create models through llm-connect, on ai v6 ([9d8c18b](https://github.com/maxgfr/db-schema-viewer/commit/9d8c18b46bea4090a6866beb0587c0bec4268661)), closes [#7](https://github.com/maxgfr/db-schema-viewer/issues/7)
+
+
+### BREAKING CHANGES
+
+* the ai peer dependency moves from ^5 to ^6 and the
+@ai-sdk/* peers from ^2 to ^3 (@ai-sdk/openai-compatible ^2 is a new
+optional peer). AISettings.providerId is optional.
+
 ## [1.3.1](https://github.com/maxgfr/db-schema-viewer/compare/v1.3.0...v1.3.1) (2026-10-12)
 
 
