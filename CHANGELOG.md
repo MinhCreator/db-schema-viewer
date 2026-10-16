@@ -1,3 +1,11 @@
+# [2.1.0](https://github.com/maxgfr/db-schema-viewer/compare/v2.0.0...v2.1.0) (2026-10-16)
+
+
+### Features
+
+* live model catalog, key encrypted for the tab, settings shared with csv-ai-analyzer ([38e51e0](https://github.com/maxgfr/db-schema-viewer/commit/38e51e0bf0bf39fd7d4798f0d919bc219fecdc6a)), closes [#9](https://github.com/maxgfr/db-schema-viewer/issues/9)
+* **toolkit:** read the response language as a code or a name ([6d6c1b3](https://github.com/maxgfr/db-schema-viewer/commit/6d6c1b3eb22a5f9da0eb66fedfcc56bde6bbba1c)), closes [#9](https://github.com/maxgfr/db-schema-viewer/issues/9)
+
 # [2.0.0](https://github.com/maxgfr/db-schema-viewer/compare/v1.3.1...v2.0.0) (2026-10-16)
 
 
