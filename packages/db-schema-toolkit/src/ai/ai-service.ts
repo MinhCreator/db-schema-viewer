@@ -114,8 +114,9 @@ function summarizeTable(table: ParsedDumpTable, columnTypes: Record<string, stri
       if (nums.length > 0) {
         const min = nums.reduce((a, b) => Math.min(a, b), Infinity);
         const max = nums.reduce((a, b) => Math.max(a, b), -Infinity);
-        const avg = Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 100) / 100;
-        lines.push(`  - ${col} (${type}): ${uniqueCount} unique, min=${min}, max=${max}, avg=${avg}`);
+        const sum = nums.reduce((a, b) => a + b, 0);
+        const avg = Math.round((sum / nums.length) * 100) / 100;
+        lines.push(`  - ${col} (${type}): ${uniqueCount} unique, min=${min}, max=${max}, avg=${avg}, sum=${Math.round(sum * 100) / 100}, ${nums.length} values`);
       } else {
         lines.push(`  - ${col} (${type}): ${uniqueCount} unique values`);
       }
@@ -211,6 +212,37 @@ export async function generateCustomChart(
   return object.chart;
 }
 
+/** Character budget of the rows sent with a data question, shared by the tables. */
+export const DATA_ROWS_MAX_CHARS = 20_000;
+
+/**
+ * A table's rows as sent with a data question: all of them, or the first ones
+ * that fit `maxChars`, under a heading saying which.
+ */
+function rowsForQuestion(table: ParsedDumpTable, maxChars: number): string {
+  const lines: string[] = [];
+  let size = 0;
+  for (const row of table.rows) {
+    const line = `  ${lines.length + 1}. { ${table.columns.map((c) => `${c}=${row[c] ?? "NULL"}`).join(", ")} }`;
+    if (size + line.length + 1 > maxChars && lines.length > 0) break;
+    lines.push(line);
+    size += line.length + 1;
+  }
+  const total = table.rows.length;
+  const heading = lines.length < total
+    ? `Data rows: rows 1 to ${lines.length} of ${total}. The other ${total - lines.length} rows are left out on purpose; the statistics above cover all ${total}.`
+    : `Data rows: all ${total} rows.`;
+  return `${heading}\n${lines.join("\n")}`;
+}
+
+const DATA_RULES = `You receive, for each table, statistics computed on every row and the rows
+themselves: all of them, or the first ones when the dump is large.
+- Totals, averages and counts over a whole table: take them from the statistics.
+- Individual rows and values: use only the rows provided. When a question needs a
+  row or a value you were not given, say that it is not in the rows you received.
+  Never infer, extrapolate or guess a value you cannot see.
+- Rows left out of a large dump are left out on purpose: the data is not truncated.`;
+
 export async function queryData(
   settings: AISettings,
   tables: ParsedDumpTable[],
@@ -225,11 +257,7 @@ export async function queryData(
   const tableSummaries = tables.map((table) => {
     const columnTypes = inferColumnTypes(table.columns, table.rows);
     const summary = summarizeTable(table, columnTypes);
-    const rowsToShow = Math.max(5, Math.floor(30 / tables.length));
-    const dataRows = table.rows.slice(0, rowsToShow).map((row) =>
-      table.columns.map((c) => `${c}=${row[c] ?? "NULL"}`).join(", ")
-    );
-    return `${summary}\n\nData rows (first ${Math.min(rowsToShow, table.rows.length)} of ${table.rows.length}):\n${dataRows.map((r, i) => `  ${i + 1}. { ${r} }`).join("\n")}`;
+    return `${summary}\n\n${rowsForQuestion(table, Math.floor(DATA_ROWS_MAX_CHARS / Math.max(1, tables.length)))}`;
   });
 
   const dataContext = tables.length === 1
@@ -247,6 +275,7 @@ export async function queryData(
   const result = streamText({
     model,
     system: `${systemPrompt}
+${DATA_RULES}
 ${languageInstruction(settings)}
 
 DATASET:
