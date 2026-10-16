@@ -306,7 +306,7 @@ Requires peer dependencies: `ai` (v6) + the SDK of each provider you call: `@ai-
 npm install ai @ai-sdk/openai
 ```
 
-Models are created by [llm-connect](https://github.com/maxgfr/llm-models/tree/main/packages/llm-connect): `AISettings` is its `LlmSettings` plus `language`. `providerNpm` picks the SDK, `providerApi` its base URL (an Anthropic-compatible provider keeps its own URL and key), and `customEndpoint` + `customModel` call an OpenAI-compatible server instead.
+Models are created by [llm-connect](https://github.com/maxgfr/llm-models/tree/main/packages/llm-connect): `AISettings` is its `LlmSettings`, whose `language` is a code (`"fr"`) or an English name (`"French"`). `providerNpm` picks the SDK, `providerApi` its base URL (an Anthropic-compatible provider keeps its own URL and key), and `customEndpoint` + `customModel` call an OpenAI-compatible server instead.
 
 ```ts
 import { challengeSchema, querySchema, type AISettings } from "db-schema-toolkit/ai";

@@ -4,18 +4,23 @@ import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { X, Key, Eye, EyeOff, Server, Loader2, Zap, Check, AlertTriangle, Search, Globe } from "lucide-react";
-import { ENDPOINT_PRESETS } from "llm-connect";
+import { ENDPOINT_PRESETS, liveCatalog, RESPONSE_LANGUAGES } from "llm-connect";
 import { useLlmStore } from "llm-connect/react";
 import { useTranslation } from "@/lib/i18n/context";
 import { aiSettingsStorage } from "@/lib/storage/ai-settings";
 
-const RECOMMENDED_PROVIDER_IDS = ["openai", "anthropic", "google", "mistral"];
-
 const OLLAMA = ENDPOINT_PRESETS.ollama;
-const LM_STUDIO = {
-  ...ENDPOINT_PRESETS.lmstudio,
-  model: "lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF",
-};
+const LM_STUDIO = ENDPOINT_PRESETS.lmstudio;
+
+// Built in the browser from models.dev on first open, shared by every dialog;
+// the models.json written at build time is the fallback.
+const catalog = liveCatalog({ fallbackUrl: `${process.env.NEXT_PUBLIC_BASE_PATH || ""}/models.json` });
+
+const SAVE_ERRORS = {
+  incomplete: "settings.fillEndpointAndModel",
+  "invalid-endpoint": "settings.invalidEndpoint",
+  "insecure-endpoint": "settings.insecureEndpoint",
+} as const;
 
 /* ---------- Component ---------- */
 
@@ -25,19 +30,12 @@ interface APIKeySettingsProps {
 
 export function APIKeySettings({ onClose }: APIKeySettingsProps) {
   const { t } = useTranslation();
-  const { state, store } = useLlmStore({
-    catalogUrl: `${process.env.NEXT_PUBLIC_BASE_PATH || ""}/models.json`,
-    storage: aiSettingsStorage,
-    recommended: RECOMMENDED_PROVIDER_IDS,
-    testMode: "generate",
-    defaults: { providerId: "openai", rememberKey: true },
-  });
+  const { state, store } = useLlmStore({ catalog, storage: aiSettingsStorage });
   const [showKey, setShowKey] = useState(false);
-  const [language, setLanguage] = useState("English");
 
   const { draft, search: searchTerm, recommendedModel } = state;
   const useCustomEndpoint = draft.custom;
-  const { customEndpoint, customModel, model, providerId, rememberKey } = draft;
+  const { customEndpoint, customModel, model, providerId, rememberKey, language } = draft;
   const apiKey = state.apiKey;
   const isLoadingCatalog = state.catalogStatus === "idle" || state.catalogStatus === "loading";
   const catalogError = state.catalogStatus === "error";
@@ -47,23 +45,16 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
   // Download the catalog and load the saved settings
   useEffect(() => {
     store.open();
-    let cancelled = false;
-    store
-      .load()
-      .then((saved) => {
-        if (!cancelled && saved?.language) setLanguage(saved.language);
-      })
-      .catch((err) => {
-        console.error("Failed to load AI settings:", err);
-      });
-    return () => { cancelled = true; };
+    store.load().catch((err) => {
+      console.error("Failed to load AI settings:", err);
+    });
   }, [store]);
 
   const handleSave = async () => {
     try {
-      const result = await store.save({ language });
+      const result = await store.save();
       if (!result.ok) {
-        toast.error(t(result.reason === "invalid-endpoint" ? "settings.invalidEndpoint" : "settings.fillEndpointAndModel"));
+        toast.error(t(SAVE_ERRORS[result.reason]));
         return;
       }
     } catch (err) {
@@ -103,6 +94,8 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
       toast.error(t("settings.connectionFailed"), {
         description: t("settings.connectionFailedCors"),
       });
+    } else if (result.reason === "insecure") {
+      toast.error(t("settings.insecureEndpoint"));
     } else {
       toast.error(result.message ?? t("settings.connectionFailed"));
     }
@@ -391,25 +384,12 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
               </label>
               <select
                 value={language}
-                onChange={(e) => setLanguage(e.target.value)}
+                onChange={(e) => store.setLanguage(e.target.value)}
                 className="w-full rounded-lg border border-border bg-accent px-3 py-2 text-sm text-foreground focus:outline-none"
               >
-                <option value="English">English</option>
-                <option value="French">Français</option>
-                <option value="Spanish">Español</option>
-                <option value="German">Deutsch</option>
-                <option value="Italian">Italiano</option>
-                <option value="Portuguese">Português</option>
-                <option value="Dutch">Nederlands</option>
-                <option value="Russian">Русский</option>
-                <option value="Chinese">中文</option>
-                <option value="Japanese">日本語</option>
-                <option value="Korean">한국어</option>
-                <option value="Arabic">العربية</option>
-                <option value="Hindi">हिन्दी</option>
-                <option value="Turkish">Türkçe</option>
-                <option value="Polish">Polski</option>
-                <option value="Swedish">Svenska</option>
+                {RESPONSE_LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>{l.label}</option>
+                ))}
               </select>
               <p className="mt-1 text-xs text-muted-foreground">
                 {t("settings.languageHint")}

@@ -3,13 +3,6 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main, master]
-  # Commits pushed with GITHUB_TOKEN (the daily catalog refresh) do not trigger "push".
-  workflow_run:
-    workflows: ["Update models.json daily"]
-    types:
-      - completed
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -24,7 +17,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,6 +58,10 @@ jobs:
 
       - name: Build package
         run: pnpm --filter db-schema-toolkit build
+
+      # Fallback of the catalog the settings build in the browser
+      - name: Write models.json
+        run: pnpm fetch-models
 
       - name: Build static export for GitHub Pages
         run: pnpm exec next build

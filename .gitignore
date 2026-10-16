@@ -43,3 +43,6 @@ next-env.d.ts
 
 /playwright-report/
 /test-results/
+
+# model catalog fallback, written at build time (pnpm fetch-models)
+/public/models.json

@@ -85,7 +85,7 @@
     "node-sql-parser": "^5.3.6",
     "lz-string": "^1.5.0",
     "@faker-js/faker": "^10.5.0",
-    "llm-connect": "^1.0.1"
+    "llm-connect": "^1.1.0"
   },
   "peerDependencies": {
     "ai": "^6.0.0",

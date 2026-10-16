@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   saveAISettings,
   loadAISettings,
+  loadAISettingsDraft,
   clearAISettings,
   resetAISettingsCacheForTests,
   type AISettings,
@@ -52,6 +53,7 @@ describe("ai-settings storage", () => {
   beforeEach(() => {
     globalThis.indexedDB = new IDBFactory();
     localStorage.clear();
+    sessionStorage.clear();
     clearCookies();
     resetAISettingsCacheForTests();
   });
@@ -87,14 +89,21 @@ describe("ai-settings storage", () => {
     expect(new TextDecoder().decode(blob.ciphertext)).not.toContain("test-key-123");
   });
 
-  it("keeps the key in memory only when rememberKey is false", async () => {
+  it("keeps the key encrypted for the tab when rememberKey is false", async () => {
     await saveAISettings(testSettings, { rememberKey: false });
     expect((await loadAISettings())?.apiKey).toBe("test-key-123");
-    expect(await readRawSecrets()).toEqual([]);
+    expect((await readRawSecrets()).some((value) => !(value instanceof CryptoKey))).toBe(false);
+    for (let i = 0; i < sessionStorage.length; i++) {
+      expect(sessionStorage.getItem(sessionStorage.key(i)!)).not.toContain("test-key-123");
+    }
+    expect(sessionStorage.getItem("db-sv-ai-settings-key")).toContain("ciphertext");
 
+    // A reload keeps it, closing the tab loses it
     resetAISettingsCacheForTests();
-    const reloaded = await loadAISettings();
-    expect(reloaded).toBeNull();
+    expect((await loadAISettings())?.apiKey).toBe("test-key-123");
+    sessionStorage.clear();
+    resetAISettingsCacheForTests();
+    expect(await loadAISettings()).toBeNull();
   });
 
   it("forgets a previously remembered key when rememberKey is turned off", async () => {
@@ -138,7 +147,15 @@ describe("ai-settings storage", () => {
     expect(loaded?.apiKey).toBe("");
     expect(loaded?.customEndpoint).toBe("http://localhost:11434/v1");
     expect(loaded?.customModel).toBe("llama3.2");
-    expect(loaded?.language).toBe("French");
+    expect(loaded?.language).toBe("fr");
+  });
+
+  it("reads the language names stored before 2.1 as codes", async () => {
+    localStorage.setItem(
+      "db-sv-ai-settings",
+      JSON.stringify({ model: "gpt-4o", providerId: "openai", language: "Japanese", rememberKey: false }),
+    );
+    expect((await loadAISettingsDraft())?.language).toBe("ja");
   });
 
   it("migrates legacy db-sv-* cookies once and deletes them", async () => {
@@ -151,7 +168,7 @@ describe("ai-settings storage", () => {
     expect(loaded?.apiKey).toBe("legacy-key");
     expect(loaded?.model).toBe("claude-sonnet");
     expect(loaded?.providerId).toBe("anthropic");
-    expect(loaded?.language).toBe("German");
+    expect(loaded?.language).toBe("de");
     expect(document.cookie).not.toContain("db-sv-");
 
     resetAISettingsCacheForTests();

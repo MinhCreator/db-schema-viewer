@@ -62,6 +62,9 @@ jobs:
           pnpm --filter db-schema-toolkit test:ci
           pnpm exec vitest run
 
+      - name: Write models.json
+        run: pnpm fetch-models
+
       - name: Build static site with deployment base path
         run: pnpm exec next build
         env:
