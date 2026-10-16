@@ -23,6 +23,8 @@ export default defineConfig([
       "@ai-sdk/anthropic",
       "@ai-sdk/google",
       "@ai-sdk/mistral",
+      "@ai-sdk/openai-compatible",
+      "llm-connect",
     ],
   },
   {

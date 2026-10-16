@@ -431,6 +431,7 @@ export const zh: Record<string, string> = {
   "settings.connectionSuccessful": "连接成功！",
   "settings.enterApiKeyFirst": "请先输入 API 密钥",
   "settings.fillEndpointAndModel": "请填写端点 URL 和模型名称",
+  "settings.invalidEndpoint": "请输入有效的 http(s) 端点 URL，例如 http://localhost:11434/v1",
   "settings.connectionFailed": "连接失败",
   "settings.connectionFailedCors": "请确保服务器正在运行并已启用 CORS。对于 Ollama，请在启动前设置 OLLAMA_ORIGINS=*。",
   "settings.language": "AI 回复语言",

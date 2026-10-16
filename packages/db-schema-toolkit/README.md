@@ -211,7 +211,7 @@ The built ESM entry points are tested directly under Node.js 24, without a bundl
 | `db-schema-toolkit` | Types, parsers, format detection, layout, sharing, utilities |
 | `db-schema-toolkit/export` | Code generation (SQL, Prisma, Drizzle, Markdown, Mermaid, DBML, PlantUML) |
 | `db-schema-toolkit/analysis` | Schema quality analysis, anti-pattern detection, schema diff |
-| `db-schema-toolkit/ai` | AI-powered schema review (requires `ai` + provider peer deps) |
+| `db-schema-toolkit/ai` | AI-powered schema review (requires `ai` v6 + provider peer deps) |
 | `db-schema-toolkit/data` | SQL dump parsing, column type inference, fake data generation |
 
 ## Parsing
@@ -300,11 +300,13 @@ console.log(diff.modifiedTables);
 
 ## AI (optional)
 
-Requires peer dependencies: `ai` + one of `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`, `@ai-sdk/mistral`.
+Requires peer dependencies: `ai` (v6) + the SDK of each provider you call: `@ai-sdk/openai` (v3, also used for custom OpenAI-compatible endpoints such as Ollama or LM Studio), `@ai-sdk/anthropic`, `@ai-sdk/google`, `@ai-sdk/mistral` (v3) or `@ai-sdk/openai-compatible` (v2, for providers such as DeepSeek or Z.ai).
 
 ```bash
 npm install ai @ai-sdk/openai
 ```
+
+Models are created by [llm-connect](https://github.com/maxgfr/llm-models/tree/main/packages/llm-connect): `AISettings` is its `LlmSettings` plus `language`. `providerNpm` picks the SDK, `providerApi` its base URL (an Anthropic-compatible provider keeps its own URL and key), and `customEndpoint` + `customModel` call an OpenAI-compatible server instead.
 
 ```ts
 import { challengeSchema, querySchema, type AISettings } from "db-schema-toolkit/ai";
@@ -330,7 +332,7 @@ await querySchema(settings, diagram, "What indexes should I add?",
 
 ### Cancelling AI work
 
-Pass an optional final `AbortSignal` to `querySchema`, `queryData`, `challengeSchema`, `suggestCharts` or `generateCustomChart`. For the streaming functions it follows the history argument. Cancellation rejects with `AbortError`; an aborted stream does not call its successful completion callback. The selected provider SDK loads on demand, so only that provider's SDK needs to be installed alongside `ai`.
+Pass an optional final `AbortSignal` to `querySchema`, `queryData`, `challengeSchema`, `suggestCharts` or `generateCustomChart`. For the streaming functions it follows the history argument. Cancellation rejects with `AbortError`; an aborted stream does not call its successful completion callback. The selected provider SDK loads on demand (through llm-connect's `loadModel`), so only that provider's SDK needs to be installed alongside `ai`.
 
 ```ts
 const controller = new AbortController();

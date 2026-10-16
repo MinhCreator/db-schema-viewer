@@ -1,49 +1,21 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { X, Key, Eye, EyeOff, Server, Loader2, Zap, Check, AlertTriangle, Search, Globe } from "lucide-react";
+import { ENDPOINT_PRESETS } from "llm-connect";
+import { useLlmStore } from "llm-connect/react";
 import { useTranslation } from "@/lib/i18n/context";
-import {
-  loadAISettingsDraft,
-  saveAISettings,
-  clearAISettings,
-  type AISettings,
-} from "@/lib/storage/ai-settings";
-import { querySchema } from "db-schema-toolkit/ai";
-
-/* ---------- Catalog types ---------- */
-
-interface ModelInfo {
-  id: string;
-  name: string;
-  description?: string;
-  providerName?: string;
-  tool_call?: boolean;
-  reasoning?: boolean;
-}
-
-interface ProviderInfo {
-  id: string;
-  name: string;
-  npm?: string;
-  api?: string;
-  defaultModel?: string;
-  models: Record<string, ModelInfo>;
-}
-
-type ModelCatalog = Record<string, ProviderInfo>;
-
-/* ---------- Defaults ---------- */
+import { aiSettingsStorage } from "@/lib/storage/ai-settings";
 
 const RECOMMENDED_PROVIDER_IDS = ["openai", "anthropic", "google", "mistral"];
 
-function defaultModelOf(provider: ProviderInfo | undefined): string | undefined {
-  if (!provider) return undefined;
-  if (provider.defaultModel && provider.models[provider.defaultModel]) return provider.defaultModel;
-  return Object.keys(provider.models)[0];
-}
+const OLLAMA = ENDPOINT_PRESETS.ollama;
+const LM_STUDIO = {
+  ...ENDPOINT_PRESETS.lmstudio,
+  model: "lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF",
+};
 
 /* ---------- Component ---------- */
 
@@ -53,161 +25,47 @@ interface APIKeySettingsProps {
 
 export function APIKeySettings({ onClose }: APIKeySettingsProps) {
   const { t } = useTranslation();
-  const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState("");
-  const [providerId, setProviderId] = useState("openai");
-  const [customEndpoint, setCustomEndpoint] = useState("");
-  const [customModel, setCustomModel] = useState("");
+  const { state, store } = useLlmStore({
+    catalogUrl: `${process.env.NEXT_PUBLIC_BASE_PATH || ""}/models.json`,
+    storage: aiSettingsStorage,
+    recommended: RECOMMENDED_PROVIDER_IDS,
+    testMode: "generate",
+    defaults: { providerId: "openai", rememberKey: true },
+  });
   const [showKey, setShowKey] = useState(false);
-  const [useCustomEndpoint, setUseCustomEndpoint] = useState(false);
-  const [isTesting, setIsTesting] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
   const [language, setLanguage] = useState("English");
-  const [rememberKey, setRememberKey] = useState(true);
 
-  // Catalog state
-  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
-  const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
-  const [catalogError, setCatalogError] = useState(false);
-  const [catalogAttempt, setCatalogAttempt] = useState(0);
+  const { draft, search: searchTerm, recommendedModel } = state;
+  const useCustomEndpoint = draft.custom;
+  const { customEndpoint, customModel, model, providerId, rememberKey } = draft;
+  const apiKey = state.apiKey;
+  const isLoadingCatalog = state.catalogStatus === "idle" || state.catalogStatus === "loading";
+  const catalogError = state.catalogStatus === "error";
+  const modelOptions = state.models;
+  const providerModelCount = state.provider ? Object.keys(state.provider.models).length : 0;
 
-  // Load saved settings
+  // Download the catalog and load the saved settings
   useEffect(() => {
+    store.open();
     let cancelled = false;
-    loadAISettingsDraft()
+    store
+      .load()
       .then((saved) => {
-        if (cancelled || !saved) return;
-        setApiKey(saved.apiKey);
-        setModel(saved.model);
-        setProviderId(saved.providerId);
-        setCustomEndpoint(saved.customEndpoint ?? "");
-        setCustomModel(saved.customModel ?? "");
-        setUseCustomEndpoint(!!saved.customEndpoint);
-        setLanguage(saved.language ?? "English");
-        setRememberKey(saved.rememberKey);
+        if (!cancelled && saved?.language) setLanguage(saved.language);
       })
       .catch((err) => {
         console.error("Failed to load AI settings:", err);
       });
     return () => { cancelled = true; };
-  }, []);
-
-  // Load catalog from models.json (once per attempt; a failure waits for "Retry")
-  useEffect(() => {
-    let cancelled = false;
-    const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
-    fetch(`${basePath}/models.json`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<ModelCatalog>;
-      })
-      .then((data) => {
-        if (cancelled) return;
-        setCatalog(data);
-        setCatalogError(false);
-        setIsLoadingCatalog(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        console.error("Failed to load models catalog:", err);
-        setCatalogError(true);
-        setIsLoadingCatalog(false);
-      });
-    return () => { cancelled = true; };
-  }, [catalogAttempt]);
-
-  const retryCatalog = useCallback(() => {
-    setIsLoadingCatalog(true);
-    setCatalogError(false);
-    setCatalogAttempt((n) => n + 1);
-  }, []);
-
-  // Pick the provider's default model once the catalog arrives and nothing is selected yet
-  useEffect(() => {
-    if (!catalog || model) return;
-    const fallback = defaultModelOf(catalog[providerId]);
-    if (fallback) setModel(fallback);
-  }, [catalog, providerId, model]);
-
-  // Provider derived from catalog
-  const selectedProvider = useMemo(() => {
-    return catalog?.[providerId] ?? null;
-  }, [catalog, providerId]);
-
-  // Split providers into recommended / others
-  const providerSelectOptions = useMemo(() => {
-    if (!catalog) return { recommended: [], others: [] };
-
-    const allProviders = Object.values(catalog);
-
-    const recommended = RECOMMENDED_PROVIDER_IDS
-      .map((id) => allProviders.find((p) => p.id === id))
-      .filter(Boolean) as ProviderInfo[];
-
-    const others = allProviders
-      .filter((p) => !RECOMMENDED_PROVIDER_IDS.includes(p.id))
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    return {
-      recommended: recommended.map((p) => ({ id: p.id, name: p.name })),
-      others: others.map((p) => ({ id: p.id, name: p.name })),
-    };
-  }, [catalog]);
-
-  // Filtered model list for current provider
-  const modelOptions = useMemo(() => {
-    if (!selectedProvider) return [];
-    const models = Object.values(selectedProvider.models).map((m) => ({
-      ...m,
-      providerName: selectedProvider.name,
-    }));
-
-    if (!searchTerm.trim()) return models;
-
-    const search = searchTerm.toLowerCase();
-    return models.filter(
-      (m) =>
-        m.name.toLowerCase().includes(search) ||
-        m.id.toLowerCase().includes(search),
-    );
-  }, [selectedProvider, searchTerm]);
-
-  // Provider metadata for saving
-  const providerMeta = useMemo(() => {
-    if (selectedProvider) {
-      return {
-        providerId: selectedProvider.id,
-        providerName: selectedProvider.name,
-        providerNpm: selectedProvider.npm ?? "",
-        providerApi: selectedProvider.api ?? "",
-      };
-    }
-    return {
-      providerId: "openai",
-      providerName: "OpenAI",
-      providerNpm: "@ai-sdk/openai",
-      providerApi: "https://api.openai.com/v1",
-    };
-  }, [selectedProvider]);
-
-  const buildSettings = useCallback((): AISettings => {
-    return {
-      apiKey,
-      model,
-      providerId: providerMeta.providerId,
-      providerName: providerMeta.providerName,
-      providerNpm: providerMeta.providerNpm,
-      providerApi: providerMeta.providerApi,
-      customEndpoint: useCustomEndpoint ? customEndpoint : undefined,
-      customModel: useCustomEndpoint ? customModel : undefined,
-      language,
-    };
-  }, [apiKey, model, providerMeta, useCustomEndpoint, customEndpoint, customModel, language]);
+  }, [store]);
 
   const handleSave = async () => {
-    const settings = buildSettings();
     try {
-      await saveAISettings(settings, { rememberKey });
+      const result = await store.save({ language });
+      if (!result.ok) {
+        toast.error(t(result.reason === "invalid-endpoint" ? "settings.invalidEndpoint" : "settings.fillEndpointAndModel"));
+        return;
+      }
     } catch (err) {
       console.error("Failed to save AI settings:", err);
       toast.error(err instanceof Error ? err.message : String(err));
@@ -219,22 +77,17 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
 
   const handleClear = async () => {
     try {
-      await clearAISettings();
+      await store.clear();
     } catch (err) {
       console.error("Failed to clear AI settings:", err);
       toast.error(err instanceof Error ? err.message : String(err));
       return;
     }
-    setApiKey("");
-    setCustomEndpoint("");
-    setCustomModel("");
-    setUseCustomEndpoint(false);
     toast.success(t("settings.cleared"));
   };
 
-  const handleTestConnection = useCallback(async () => {
-    const settings = buildSettings();
-    if (!settings.apiKey && !useCustomEndpoint) {
+  const handleTestConnection = async () => {
+    if (!apiKey && !useCustomEndpoint) {
       toast.error(t("settings.enterApiKeyFirst"));
       return;
     }
@@ -243,57 +96,17 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
       return;
     }
 
-    setIsTesting(true);
-    try {
-      if (useCustomEndpoint) {
-        const res = await fetch(`${customEndpoint.replace(/\/+$/, "")}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
-          },
-          body: JSON.stringify({
-            model: customModel,
-            messages: [{ role: "user", content: "hi" }],
-            max_tokens: 1,
-            stream: false,
-          }),
-        });
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          throw new Error(`HTTP ${res.status}: ${body || res.statusText}`);
-        }
-      } else {
-        const minDiagram = {
-          id: "t", name: "t", databaseType: "generic" as const,
-          tables: [{
-            id: "t", name: "t", fields: [{ id: "f", name: "id", type: "int", primaryKey: true, unique: false, nullable: false, isForeignKey: false }],
-            indexes: [], x: 0, y: 0, isView: false,
-          }],
-          relationships: [], createdAt: "",
-        };
-        await querySchema(settings, minDiagram, "Say OK in 2 words max", () => {}, () => {}, []);
-      }
+    const result = await store.test();
+    if (result.ok) {
       toast.success(t("settings.connectionSuccessful"));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : t("settings.connectionFailed");
-      if (message.includes("Failed to fetch")) {
-        toast.error(t("settings.connectionFailed"), {
-          description: t("settings.connectionFailedCors"),
-        });
-      } else {
-        toast.error(message);
-      }
-    } finally {
-      setIsTesting(false);
+    } else if (result.reason === "cors") {
+      toast.error(t("settings.connectionFailed"), {
+        description: t("settings.connectionFailedCors"),
+      });
+    } else {
+      toast.error(result.message ?? t("settings.connectionFailed"));
     }
-  }, [buildSettings, useCustomEndpoint, customEndpoint, customModel, t]);
-
-  // Recommended model for the current provider
-  const recommendedModelId = selectedProvider?.defaultModel;
-  const recommendedModel = recommendedModelId
-    ? modelOptions.find((m) => m.id === recommendedModelId)
-    : null;
+  };
 
   const modalContent = (
     <>
@@ -328,7 +141,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
               <input
                 type="checkbox"
                 checked={useCustomEndpoint}
-                onChange={(e) => setUseCustomEndpoint(e.target.checked)}
+                onChange={(e) => store.toggleCustom(e.target.checked)}
                 className="rounded border-border"
               />
               <Server className="h-4 w-4 text-muted-foreground" />
@@ -341,12 +154,9 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      setCustomEndpoint("http://localhost:11434/v1");
-                      if (!customModel.trim()) setCustomModel("llama3.2");
-                    }}
+                    onClick={() => store.applyPreset(OLLAMA)}
                     className={`flex-1 rounded-lg border p-2 text-center text-sm font-medium transition-all ${
-                      customEndpoint === "http://localhost:11434/v1"
+                      customEndpoint === OLLAMA.endpoint
                         ? "border-emerald-500 bg-emerald-500/15 text-foreground"
                         : "border-border bg-accent text-foreground hover:border-emerald-500/50"
                     }`}
@@ -356,12 +166,9 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setCustomEndpoint("http://localhost:1234/v1");
-                      if (!customModel.trim()) setCustomModel("lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF");
-                    }}
+                    onClick={() => store.applyPreset(LM_STUDIO)}
                     className={`flex-1 rounded-lg border p-2 text-center text-sm font-medium transition-all ${
-                      customEndpoint === "http://localhost:1234/v1"
+                      customEndpoint === LM_STUDIO.endpoint
                         ? "border-emerald-500 bg-emerald-500/15 text-foreground"
                         : "border-border bg-accent text-foreground hover:border-emerald-500/50"
                     }`}
@@ -376,7 +183,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                   <input
                     type="text"
                     value={customEndpoint}
-                    onChange={(e) => setCustomEndpoint(e.target.value)}
+                    onChange={(e) => store.setEndpoint(e.target.value)}
                     placeholder={t("settings.apiBaseUrlPlaceholder")}
                     className="w-full rounded-lg border border-border bg-accent px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-indigo-500 focus:outline-none"
                   />
@@ -389,7 +196,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                   <input
                     type="text"
                     value={customModel}
-                    onChange={(e) => setCustomModel(e.target.value)}
+                    onChange={(e) => store.setCustomModel(e.target.value)}
                     placeholder={t("settings.modelNamePlaceholder")}
                     className="w-full rounded-lg border border-border bg-accent px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-indigo-500 focus:outline-none"
                   />
@@ -410,7 +217,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                       <span>{t("settings.catalogError")}</span>
                       <button
                         type="button"
-                        onClick={retryCatalog}
+                        onClick={store.retryCatalog}
                         className="rounded-md border border-amber-500/40 px-2 py-1 text-xs font-medium hover:bg-amber-500/10"
                       >
                         {t("settings.retry")}
@@ -419,33 +226,27 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                   ) : (
                     <select
                       value={providerId}
-                      onChange={(e) => {
-                        const newProviderId = e.target.value;
-                        setProviderId(newProviderId);
-                        setSearchTerm("");
-                        // Auto-select recommended model or first available
-                        const defaultModel = defaultModelOf(catalog?.[newProviderId]);
-                        if (defaultModel) setModel(defaultModel);
-                      }}
+                      // Switches to the provider's recommended model, or its first one
+                      onChange={(e) => store.selectProvider(e.target.value)}
                       className="w-full rounded-lg border border-border bg-accent px-3 py-2 text-sm text-foreground focus:outline-none"
                     >
-                      {providerSelectOptions.recommended.length > 0 && (
+                      {state.providers.recommended.length > 0 && (
                         <optgroup label={t("settings.recommended")}>
-                          {providerSelectOptions.recommended.map((p) => (
+                          {state.providers.recommended.map((p) => (
                             <option key={p.id} value={p.id}>{p.name}</option>
                           ))}
                         </optgroup>
                       )}
-                      {providerSelectOptions.others.length > 0 && (
+                      {state.providers.others.length > 0 && (
                         <optgroup label={t("settings.otherProviders")}>
-                          {providerSelectOptions.others.map((p) => (
+                          {state.providers.others.map((p) => (
                             <option key={p.id} value={p.id}>{p.name}</option>
                           ))}
                         </optgroup>
                       )}
                     </select>
                   )}
-                  {providerSelectOptions.others.some((p) => p.id === providerId) && (
+                  {state.provider && !state.isRecommendedProvider && (
                     <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2">
                       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
                       <p className="text-xs text-amber-400">
@@ -468,7 +269,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                       </div>
                       <button
                         type="button"
-                        onClick={() => setModel(recommendedModel.id)}
+                        onClick={() => store.selectModel(recommendedModel.id)}
                         className={`w-full rounded-lg border p-2.5 text-left text-sm transition-all ${
                           model === recommendedModel.id
                             ? "border-emerald-500 bg-emerald-500/15 text-foreground"
@@ -484,13 +285,13 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                   )}
 
                   {/* Model search */}
-                  {modelOptions.length > 5 && (
+                  {providerModelCount > 5 && (
                     <div className="relative mb-2">
                       <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                       <input
                         type="text"
                         value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
+                        onChange={(e) => store.setSearch(e.target.value)}
                         placeholder={t("settings.searchModels")}
                         className="w-full rounded-lg border border-border bg-accent pl-8 pr-3 py-1.5 text-sm text-foreground placeholder-muted-foreground focus:border-indigo-500 focus:outline-none"
                       />
@@ -503,7 +304,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                       <button
                         key={m.id}
                         type="button"
-                        onClick={() => setModel(m.id)}
+                        onClick={() => store.selectModel(m.id)}
                         className={`w-full rounded-lg border p-2.5 text-left text-sm transition-all ${
                           model === m.id
                             ? "border-indigo-500 bg-indigo-500/15 text-foreground"
@@ -549,7 +350,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                 <input
                   type={showKey ? "text" : "password"}
                   value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
+                  onChange={(e) => store.setApiKey(e.target.value)}
                   placeholder={t("settings.apiKeyPlaceholder")}
                   className="w-full rounded-lg border border-border bg-accent px-3 py-2 pr-10 text-sm text-foreground placeholder-muted-foreground focus:border-indigo-500 focus:outline-none"
                 />
@@ -572,7 +373,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                 <input
                   type="checkbox"
                   checked={rememberKey}
-                  onChange={(e) => setRememberKey(e.target.checked)}
+                  onChange={(e) => store.setRememberKey(e.target.checked)}
                   className="mt-0.5 rounded border-border"
                 />
                 <span>
@@ -627,10 +428,10 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
             <div className="flex-1" />
             <button
               onClick={handleTestConnection}
-              disabled={isTesting}
+              disabled={state.testing}
               className="flex items-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-accent disabled:opacity-50"
             >
-              {isTesting ? (
+              {state.testing ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Zap className="h-4 w-4" />
@@ -645,11 +446,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
             </button>
             <button
               onClick={handleSave}
-              disabled={
-                useCustomEndpoint
-                  ? !customEndpoint.trim() || !customModel.trim()
-                  : !apiKey.trim() || !model
-              }
+              disabled={!state.canSave}
               className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
             >
               {t("common.save")}

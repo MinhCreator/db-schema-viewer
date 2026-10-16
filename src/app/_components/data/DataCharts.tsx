@@ -36,6 +36,7 @@ import {
 } from "recharts";
 import type { ParsedDumpTable } from "db-schema-toolkit/data";
 import { inferColumnTypes } from "db-schema-toolkit/data";
+import { isConfigured } from "llm-connect";
 import { loadAISettings } from "@/lib/storage/ai-settings";
 import {
   suggestCharts,
@@ -321,7 +322,7 @@ export function DataCharts({ table }: DataChartsProps) {
 
   const handleSuggestCharts = useCallback(async () => {
     const settings = await loadAISettings();
-    if (!settings || (!settings.apiKey && !settings.customEndpoint)) {
+    if (!settings || !isConfigured(settings)) {
       toast.error(t("common.noAiConfigured"), {
         description: t("common.noAiConfiguredDesc"),
       });
@@ -354,7 +355,7 @@ export function DataCharts({ table }: DataChartsProps) {
     if (!customPrompt.trim()) return;
 
     const settings = await loadAISettings();
-    if (!settings || (!settings.apiKey && !settings.customEndpoint)) {
+    if (!settings || !isConfigured(settings)) {
       toast.error(t("common.noAiConfigured"), {
         description: t("common.noAiConfiguredDesc"),
       });

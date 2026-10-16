@@ -431,6 +431,7 @@ export const fr: Record<string, string> = {
   "settings.connectionSuccessful": "Connexion r\u00e9ussie\u00a0!",
   "settings.enterApiKeyFirst": "Veuillez d\u2019abord saisir une cl\u00e9 API",
   "settings.fillEndpointAndModel": "Veuillez remplir l\u2019URL de l\u2019endpoint et le nom du mod\u00e8le",
+  "settings.invalidEndpoint": "Saisissez une URL d'endpoint http(s) valide, par ex. http://localhost:11434/v1",
   "settings.connectionFailed": "\u00c9chec de la connexion",
   "settings.connectionFailedCors": "V\u00e9rifiez que le serveur est lanc\u00e9 et que le CORS est activ\u00e9. Pour Ollama, d\u00e9finissez OLLAMA_ORIGINS=* avant de d\u00e9marrer.",
   "settings.language": "Langue des réponses IA",
