@@ -1,5 +1,5 @@
 import { streamText, generateObject } from "ai";
-import { loadModel } from "llm-connect";
+import { languageName, loadModel } from "llm-connect";
 import { z } from "zod";
 import type { AISettings } from "./types";
 import type { Diagram } from "../domain";
@@ -33,9 +33,9 @@ const ChallengeResponseSchema = z.object({
 });
 export type ChallengeResponse = z.infer<typeof ChallengeResponseSchema>;
 
+// The language is a code ("fr"), or a name ("French") as settings before 2.1 stored it
 function languageInstruction(settings: AISettings): string {
-  const lang = settings.language ?? "English";
-  return `IMPORTANT: Always respond in ${lang}.`;
+  return `IMPORTANT: Always respond in ${languageName(settings.language)}.`;
 }
 
 export async function querySchema(
