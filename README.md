@@ -331,7 +331,7 @@ src/
 └── __tests__/                  # Component, hook and lib tests
 ```
 
-The AI model picker reads `public/models.json`, generated daily by `scripts/fetch-models.mjs` from the [`llm-models`](https://www.npmjs.com/package/llm-models) package (deprecated models dropped, only the fields the app uses kept).
+The AI model picker reads `public/models.json`, generated daily by `pnpm fetch-models` (`llm-models catalog` from the [`llm-models`](https://www.npmjs.com/package/llm-models) package): only providers the app can call, deprecated models dropped, only the fields the app uses kept.
 
 ### Self-hosting with Docker
 
