@@ -1,3 +1,10 @@
+## [2.1.1](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.0...v2.1.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* **toolkit:** send the rows to the data chat instead of letting the model guess them ([11af991](https://github.com/maxgfr/db-schema-viewer/commit/11af991d0257f1e69293c7a1acb83de6bbc4e154)), closes [#11](https://github.com/maxgfr/db-schema-viewer/issues/11)
+
 # [2.1.0](https://github.com/maxgfr/db-schema-viewer/compare/v2.0.0...v2.1.0) (2026-10-16)
 
 
