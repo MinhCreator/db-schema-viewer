@@ -76,7 +76,7 @@ Weighted pattern matching detects the database type from SQL syntax:
 - **Report export** — Download challenge results as JSON or Markdown
 - **Review by category** — Filter issues by severity (critical/warning/info) and category (naming, security, performance...)
 - **Multi-provider** — OpenAI, Anthropic, Google Gemini, Mistral, or any OpenAI-compatible endpoint
-- **Secure** — API keys never leave the browser except to the chosen provider. With "Remember the key on this device" (default), the key is encrypted with AES-GCM under a non-extractable browser key and stored in IndexedDB; unchecked, it stays in memory until the tab closes. Other AI settings live in localStorage. A Content-Security-Policy restricts scripts, objects, base URIs and form targets
+- **Secure** — API keys never leave the browser except to the chosen provider. The key is never stored in clear text: it is encrypted with AES-GCM under a non-extractable browser key. With "Remember the key on this device", the ciphertext is kept in IndexedDB; unchecked (the default), in sessionStorage, so it survives a reload and is gone when the tab closes. A custom endpoint must use https, or plain http on this machine (Ollama, LM Studio). Other AI settings live in localStorage. A Content-Security-Policy restricts scripts, objects, base URIs and form targets
 
 ### Export
 
@@ -331,11 +331,11 @@ src/
 └── __tests__/                  # Component, hook and lib tests
 ```
 
-The AI model picker reads `public/models.json`, generated daily by `pnpm fetch-models` (`llm-models catalog` from the [`llm-models`](https://www.npmjs.com/package/llm-models) package): only providers the app can call, deprecated models dropped, only the fields the app uses kept.
+The AI model picker builds its catalog in the browser from models.dev and OpenRouter when the settings open ([`llm-models`](https://www.npmjs.com/package/llm-models), loaded on demand through llm-connect's `liveCatalog`): only providers the app can call, deprecated models dropped, only the fields the app uses kept. `public/models.json` is the offline fallback; `pnpm fetch-models` writes it before each build and it is not committed.
 
 ### Self-hosting with Docker
 
-The two-stage `Dockerfile` (builder → runner, `node:24-alpine`, non-root user) builds the standalone Next.js server, which also sends the CSP and security headers. Images are published to GHCR on releases and catalog updates.
+The two-stage `Dockerfile` (builder → runner, `node:24-alpine`, non-root user) builds the standalone Next.js server, which also sends the CSP and security headers. Images are published to GHCR on releases.
 
 ```bash
 docker compose up --build   # http://localhost:3000
