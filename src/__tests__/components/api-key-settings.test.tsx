@@ -27,6 +27,17 @@ const catalog = {
   },
 };
 
+/** models.dev and OpenRouter unreachable, so the catalog comes from the static fallback. */
+function stubFetch(answer: (url: string) => Response | Promise<Response>) {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith("https://models.dev") || url.startsWith("https://openrouter.ai")) {
+      throw new TypeError("Failed to fetch");
+    }
+    return answer(url);
+  }));
+}
+
 function renderSettings() {
   render(<I18nProvider><APIKeySettings onClose={() => {}} /></I18nProvider>);
   fireEvent.change(screen.getByPlaceholderText(/sk-|key/i), { target: { value: "test-key" } });
@@ -36,14 +47,14 @@ beforeEach(() => { vi.clearAllMocks(); clearCatalogCache(); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 it("cannot save a provider configuration without a model when the catalog failed", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response("down", { status: 503 })));
+  stubFetch(() => new Response("down", { status: 503 }));
   renderSettings();
   await screen.findByRole("button", { name: "Retry" });
   expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
 });
 
 it("saves the provider's default model from the catalog", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(catalog), { status: 200 })));
+  stubFetch(() => new Response(JSON.stringify(catalog), { status: 200 }));
   renderSettings();
   // The default model is picked in an effect after the catalog renders.
   const save = screen.getByRole("button", { name: "Save" });
@@ -58,17 +69,39 @@ it("saves the provider's default model from the catalog", async () => {
       providerName: "OpenAI",
       providerNpm: "@ai-sdk/openai",
       providerApi: "",
-      language: "English",
+      language: "en",
     },
-    { rememberKey: true },
+    { rememberKey: false },
   ]);
 });
 
+it("saves the response language as a code", async () => {
+  stubFetch(() => new Response(JSON.stringify(catalog), { status: 200 }));
+  renderSettings();
+  fireEvent.change(screen.getByDisplayValue("English"), { target: { value: "fr" } });
+  const save = screen.getByRole("button", { name: "Save" });
+  await waitFor(() => expect(save).toBeEnabled());
+  fireEvent.click(save);
+  await waitFor(() => expect(aiSettingsStorage.save).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(aiSettingsStorage.save).mock.calls[0]![0]).toMatchObject({ language: "fr" });
+});
+
+it("refuses plain http to another machine", async () => {
+  stubFetch(() => new Response(JSON.stringify(catalog), { status: 200 }));
+  render(<I18nProvider><APIKeySettings onClose={() => {}} /></I18nProvider>);
+  fireEvent.click(screen.getByRole("checkbox", { name: /custom/i }));
+  fireEvent.change(screen.getByPlaceholderText(/localhost/i), { target: { value: "http://192.168.1.10/v1" } });
+  fireEvent.change(screen.getByPlaceholderText(/llama|model/i), { target: { value: "llama3.2" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("https")));
+  expect(aiSettingsStorage.save).not.toHaveBeenCalled();
+});
+
 it("explains a blocked connection test on a local endpoint", async () => {
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-    if (String(input).endsWith("/models.json")) return new Response(JSON.stringify(catalog), { status: 200 });
+  stubFetch((url) => {
+    if (url.endsWith("/models.json")) return new Response(JSON.stringify(catalog), { status: 200 });
     throw new TypeError("Failed to fetch");
-  }));
+  });
   render(<I18nProvider><APIKeySettings onClose={() => {}} /></I18nProvider>);
   fireEvent.click(screen.getByRole("checkbox", { name: /custom/i }));
   fireEvent.click(screen.getByRole("button", { name: /Ollama/ }));
@@ -78,6 +111,6 @@ it("explains a blocked connection test on a local endpoint", async () => {
     description: expect.stringContaining("OLLAMA_ORIGINS"),
   });
   expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).toContain(
-    "http://localhost:11434/v1/chat/completions",
+    "http://localhost:11434/v1/models",
   );
 });

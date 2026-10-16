@@ -42,6 +42,7 @@ test("AI streams a mocked response and retains conversation when reopened", asyn
   await context.addCookies([
     { name: "db-sv-api-key", value: "test-key", url: baseURL! },
     { name: "db-sv-custom-endpoint", value: encodeURIComponent(new URL("/v1", baseURL).href), url: baseURL! },
+    { name: "db-sv-custom-model", value: "test-model", url: baseURL! },
   ]);
   await page.route("**/v1/chat/completions", async (route) => {
     await route.fulfill({ contentType: "text/event-stream", body:
@@ -63,6 +64,7 @@ test("AI challenge renders and exports a mocked structured review", async ({ pag
   await context.addCookies([
     { name: "db-sv-api-key", value: "test-key", url: baseURL! },
     { name: "db-sv-custom-endpoint", value: encodeURIComponent(new URL("/v1", baseURL).href), url: baseURL! },
+    { name: "db-sv-custom-model", value: "test-model", url: baseURL! },
   ]);
   const review = { overallScore: 88, summary: "Review completed", issues: [{ severity: "warning", category: "indexing", table: "users", description: "Consider an index on name", suggestion: "Measure query plans" }] };
   await page.route("**/v1/chat/completions", (route) => route.fulfill({ json: {
