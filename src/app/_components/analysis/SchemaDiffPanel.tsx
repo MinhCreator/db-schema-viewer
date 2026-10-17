@@ -10,7 +10,7 @@ import { diffSchemas, type SchemaDiff, type TableDiff, type FieldDiff } from "db
 import { parseSchemaInput } from "@/lib/parsing/parse-input";
 import { isConfigured } from "llm-connect";
 import { loadAISettings } from "@/lib/storage/ai-settings";
-import { querySchema } from "db-schema-toolkit/ai";
+import { querySchema, schemaToPromptContext } from "db-schema-toolkit/ai";
 import { MarkdownContent } from "../shared/MarkdownContent";
 
 interface SchemaDiffPanelProps {
@@ -95,6 +95,19 @@ function TableDiffCard({ diff }: { diff: TableDiff }) {
   );
 }
 
+/** The diff's counts in the interface language (the toolkit's summary is English). */
+function diffSummaryText(diff: SchemaDiff, t: (key: string, params?: Record<string, string | number>) => string): string {
+  const counts: [string, number][] = [
+    ["diff.addedTables", diff.addedTables.length],
+    ["diff.removedTables", diff.removedTables.length],
+    ["diff.modifiedTables", diff.modifiedTables.length],
+    ["diff.addedRelationships", diff.addedRelationships.length],
+    ["diff.removedRelationships", diff.removedRelationships.length],
+  ];
+  const parts = counts.filter(([, n]) => n > 0).map(([key, n]) => `${t(key)}: ${n}`);
+  return parts.length > 0 ? parts.join(" · ") : t("diff.identical");
+}
+
 export function SchemaDiffPanel({ currentDiagram, onClose }: SchemaDiffPanelProps) {
   const { t } = useTranslation();
   const [diff, setDiff] = useState<SchemaDiff | null>(null);
@@ -134,6 +147,8 @@ export function SchemaDiffPanel({ currentDiagram, onClose }: SchemaDiffPanelProp
     setIsAnalyzing(true);
     setAiAnalysis("");
 
+    // Each change with its old and new value, and the whole new schema: with
+    // field names alone the model cannot tell what a migration does
     const diffSummary = [
       diff.summary,
       diff.addedTables.length > 0 ? `Added tables: ${diff.addedTables.join(", ")}` : "",
@@ -142,16 +157,22 @@ export function SchemaDiffPanel({ currentDiagram, onClose }: SchemaDiffPanelProp
         const parts = [`Modified ${t.tableName}:`];
         if (t.addedFields.length > 0) parts.push(`  added fields: ${t.addedFields.join(", ")}`);
         if (t.removedFields.length > 0) parts.push(`  removed fields: ${t.removedFields.join(", ")}`);
-        if (t.modifiedFields.length > 0) parts.push(`  changed fields: ${t.modifiedFields.map((f) => f.fieldName).join(", ")}`);
+        for (const f of t.modifiedFields)
+          parts.push(`  changed ${f.fieldName}: ${f.changes.map((c) => `${c.property} ${c.oldValue || "(none)"} -> ${c.newValue || "(none)"}`).join("; ")}`);
+        if (t.addedIndexes.length > 0) parts.push(`  added indexes: ${t.addedIndexes.join(", ")}`);
+        if (t.removedIndexes.length > 0) parts.push(`  removed indexes: ${t.removedIndexes.join(", ")}`);
         return parts.join("\n");
       }),
+      ...diff.addedRelationships.map((r) => `Added relationship: ${r.sourceTable}.${r.sourceField} -> ${r.targetTable}.${r.targetField} (${r.cardinality})`),
+      ...diff.removedRelationships.map((r) => `Removed relationship: ${r.sourceTable}.${r.sourceField} -> ${r.targetTable}.${r.targetField} (${r.cardinality})`),
     ].filter(Boolean).join("\n");
+    const newSchema = schemaToPromptContext(newDiagramRef.current);
 
     try {
       await querySchema(
         settings,
         currentDiagram,
-        `I'm comparing two versions of my schema. Here is the diff:\n\n${diffSummary}\n\nPlease:\n1. Evaluate if this migration is safe\n2. Identify potential data loss risks\n3. Suggest the migration order\n4. Flag any breaking changes`,
+        `I'm comparing two versions of my schema. The current one is above; here is the diff to the new one:\n\n${diffSummary}\n\nNEW SCHEMA:\n${newSchema}\n\nPlease:\n1. Evaluate if this migration is safe\n2. Identify potential data loss risks\n3. Suggest the migration order\n4. Flag any breaking changes`,
         (chunk) => { if (!controller.signal.aborted) setAiAnalysis((prev) => prev + chunk); },
         () => { if (aiController.current === controller) setIsAnalyzing(false); },
         [],
@@ -179,7 +200,7 @@ export function SchemaDiffPanel({ currentDiagram, onClose }: SchemaDiffPanelProp
       const result = diffSchemas(currentDiagram, project.diagram);
       setDiff(result);
       setAiAnalysis("");
-      toast.success(result.summary);
+      toast.success(diffSummaryText(result, t));
     } catch (error) {
       if (!controller.signal.aborted) toast.error(t("diff.failedToParse"), { description: error instanceof Error ? error.message : undefined });
     } finally { if (compareController.current === controller) setIsComparing(false); }
@@ -295,7 +316,7 @@ export function SchemaDiffPanel({ currentDiagram, onClose }: SchemaDiffPanelProp
             ) : (
               <>
                 <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-4 py-3">
-                  <p className="text-sm font-medium text-indigo-600 dark:text-indigo-300">{diff.summary}</p>
+                  <p className="text-sm font-medium text-indigo-600 dark:text-indigo-300">{diffSummaryText(diff, t)}</p>
                 </div>
 
                 {noChanges && (
