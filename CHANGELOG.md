@@ -1,3 +1,10 @@
+## [2.1.4](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.3...v2.1.4) (2026-10-17)
+
+
+### Bug Fixes
+
+* **deps:** llm-models 1.10.0, so the model picker only lists chat models ([00ef059](https://github.com/maxgfr/db-schema-viewer/commit/00ef0595f76ce6aed427b0783cb2458a53d9ca95)), closes [#19](https://github.com/maxgfr/db-schema-viewer/issues/19)
+
 ## [2.1.3](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.2...v2.1.3) (2026-10-17)
 
 
