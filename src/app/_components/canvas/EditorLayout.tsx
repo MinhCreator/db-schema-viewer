@@ -66,6 +66,19 @@ interface EditorLayoutProps {
   onToggleTheme: () => void;
 }
 
+/**
+ * The center of the visible canvas in diagram coordinates, read from the
+ * pane's actual transform: a new note lands where the user is looking, not at
+ * a fixed spot that is off-screen once the view is panned, zoomed or narrow.
+ */
+function visibleCenter(): { x: number; y: number } {
+  const pane = document.querySelector(".react-flow")?.getBoundingClientRect();
+  const viewport = document.querySelector(".react-flow__viewport");
+  if (!pane || !viewport) return { x: 200, y: 200 };
+  const { a: zoom, e: tx, f: ty } = new DOMMatrixReadOnly(getComputedStyle(viewport).transform);
+  return { x: (pane.width / 2 - tx) / (zoom || 1), y: (pane.height / 2 - ty) / (zoom || 1) };
+}
+
 export function EditorLayout({ project, onProjectChange, onProjectOpened, saveStatus, onSave, onBack, theme, themeMode, onToggleTheme }: EditorLayoutProps) {
   const { diagram, annotations, viewSettings } = project;
   const erdNotation = viewSettings.erdNotation ?? "crowsfoot";
@@ -145,9 +158,10 @@ export function EditorLayout({ project, onProjectChange, onProjectOpened, saveSt
   const handleAddAnnotation = useCallback(() => {
     annotationCounter.current++;
     const id = `note-${annotationCounter.current}-${Date.now()}`;
+    const { x, y } = visibleCenter();
     setAnnotations((prev) => [
       ...prev,
-      { id, text: "", x: 100 + Math.random() * 200, y: 100 + Math.random() * 200, color: String(annotationCounter.current % 4) },
+      { id, text: "", x: x - 90 + (Math.random() - 0.5) * 60, y: y - 40 + (Math.random() - 0.5) * 60, color: String(annotationCounter.current % 4) },
     ]);
   }, [setAnnotations]);
 
