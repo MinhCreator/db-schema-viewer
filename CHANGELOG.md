@@ -1,3 +1,10 @@
+## [2.1.3](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.2...v2.1.3) (2026-10-17)
+
+
+### Bug Fixes
+
+* give the diff AI each change with its values, and translate the diff summary ([f22afc0](https://github.com/maxgfr/db-schema-viewer/commit/f22afc090f9643d4569a07e398495685a02845e5)), closes [#15](https://github.com/maxgfr/db-schema-viewer/issues/15)
+
 ## [2.1.2](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.1...v2.1.2) (2026-10-17)
 
 
