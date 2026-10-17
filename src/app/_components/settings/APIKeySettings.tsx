@@ -106,7 +106,9 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
       <div className="fixed inset-0 z-50 bg-gray-950/90 backdrop-blur-sm" onClick={onClose} />
       <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-4">
         <div
-          className="animate-scale-in pointer-events-auto max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-border bg-card shadow-2xl"
+          // Fixed height: only the content scrolls, so the footer buttons never
+          // move when the model list arrives
+          className="animate-scale-in pointer-events-auto flex h-[min(90vh,52rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
@@ -123,7 +125,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
           </div>
 
           {/* Content */}
-          <div className="space-y-5 p-6">
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-6">
             {/* Security notice */}
             <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-400">
               {t("settings.securityNotice")}
@@ -398,7 +400,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
           </div>
 
           {/* Footer */}
-          <div className="flex gap-3 border-t border-border px-6 py-4">
+          <div className="flex shrink-0 gap-3 border-t border-border px-6 py-4">
             <button
               onClick={handleClear}
               className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-accent"
