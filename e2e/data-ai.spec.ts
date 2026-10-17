@@ -89,7 +89,9 @@ test("schema comparison loads through the worker and shows added tables", async 
   await expect(page.getByRole("heading", { name: "Schema Diff", exact: true })).toBeVisible();
   await page.locator('input[type="file"]').setInputFiles({ name: "new.sql", mimeType: "text/plain", buffer: Buffer.from("CREATE TABLE users(id INT PRIMARY KEY, name TEXT, amount INT); CREATE TABLE orders(id INT PRIMARY KEY);") });
   await expect(page.getByText("orders", { exact: true })).toBeVisible();
-  await expect(page.getByText(/Added Tables/)).toBeVisible();
+  const diffDialog = page.getByRole("dialog", { name: "Schema Diff" });
+  await expect(diffDialog.getByText("Added Tables", { exact: true })).toBeVisible();
+  await expect(diffDialog.getByText("Added Tables: 1", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator(".react-flow__node-table")).toHaveCount(1);
 });
