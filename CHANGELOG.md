@@ -1,3 +1,10 @@
+## [2.1.6](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.5...v2.1.6) (2026-10-17)
+
+
+### Bug Fixes
+
+* keep the AI settings footer in place while the model list loads ([49854d2](https://github.com/maxgfr/db-schema-viewer/commit/49854d28c6970067e7f7c0809c48102ebb03ef1d)), closes [#17](https://github.com/maxgfr/db-schema-viewer/issues/17)
+
 ## [2.1.5](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.4...v2.1.5) (2026-10-17)
 
 
