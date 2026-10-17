@@ -1,3 +1,10 @@
+## [2.1.5](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.4...v2.1.5) (2026-10-17)
+
+
+### Bug Fixes
+
+* add sticky notes where the canvas is visible ([b020b96](https://github.com/maxgfr/db-schema-viewer/commit/b020b963d78da65290c1140583787566dc3ebdc6)), closes [#21](https://github.com/maxgfr/db-schema-viewer/issues/21)
+
 ## [2.1.4](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.3...v2.1.4) (2026-10-17)
 
 
