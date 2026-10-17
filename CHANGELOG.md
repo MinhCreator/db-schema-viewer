@@ -1,3 +1,10 @@
+## [2.1.2](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.1...v2.1.2) (2026-10-17)
+
+
+### Bug Fixes
+
+* bin chart dates in UTC so first-of-month dates stay in their month ([c75d424](https://github.com/maxgfr/db-schema-viewer/commit/c75d4248687ba09ee51f99a7099eaf6a9e9a1e7f)), closes [#13](https://github.com/maxgfr/db-schema-viewer/issues/13)
+
 ## [2.1.1](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.0...v2.1.1) (2026-10-16)
 
 
