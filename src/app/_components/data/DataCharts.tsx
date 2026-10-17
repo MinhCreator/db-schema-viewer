@@ -910,23 +910,24 @@ function CorrelationMatrix({
 
 type DateBin = "day" | "week" | "month" | "year";
 
-function binDate(dateStr: string, bin: DateBin): string {
+// In UTC throughout: a date-only value is UTC midnight, so local getters would
+// put 2024-03-01 in February west of UTC
+export function binDate(dateStr: string, bin: DateBin): string {
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return dateStr;
   switch (bin) {
     case "day":
       return d.toISOString().slice(0, 10);
     case "week": {
-      const day = d.getDay();
-      const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+      const day = d.getUTCDay();
       const monday = new Date(d);
-      monday.setDate(diff);
+      monday.setUTCDate(d.getUTCDate() - day + (day === 0 ? -6 : 1));
       return `W ${monday.toISOString().slice(0, 10)}`;
     }
     case "month":
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      return d.toISOString().slice(0, 7);
     case "year":
-      return String(d.getFullYear());
+      return String(d.getUTCFullYear());
   }
 }
 
