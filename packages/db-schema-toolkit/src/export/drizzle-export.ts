@@ -250,7 +250,6 @@ function buildColumnBuilder(
   field: DBField,
   table: DBTable,
   dialect: DrizzleDialect,
-  allTables: DBTable[],
   fkMap: Map<string, { targetTableName: string; targetFieldName: string }>,
 ): ColumnBuilderInfo {
   const { builder, lengthArg } = mapSqlTypeToDrizzle(field.type, dialect);
@@ -291,8 +290,6 @@ function buildColumnBuilder(
     } else {
       chains.push(`.default("${defVal}")`);
     }
-  } else if (isAutoIncrement(field.type) && !field.primaryKey) {
-    // Serial types already imply auto increment, no extra default needed
   }
 
   // Handle FK references
@@ -314,8 +311,9 @@ export function exportDiagramToDrizzle(diagram: Diagram): string {
 
   // Build FK map: "sourceTableId:sourceFieldId" -> { targetTableName, targetFieldName }
   const fkMap = new Map<string, { targetTableName: string; targetFieldName: string }>();
+  const tablesById = new Map(diagram.tables.map((t) => [t.id, t]));
   for (const rel of diagram.relationships) {
-    const targetTable = diagram.tables.find((t) => t.id === rel.targetTableId);
+    const targetTable = tablesById.get(rel.targetTableId);
     const targetField = targetTable?.fields.find((f) => f.id === rel.targetFieldId);
     if (targetTable && targetField) {
       fkMap.set(`${rel.sourceTableId}:${rel.sourceFieldId}`, {
@@ -351,32 +349,39 @@ export function exportDiagramToDrizzle(diagram: Diagram): string {
     }
   }
 
-  // Build import statement
-  const builderNames = Array.from(usedBuilders).sort();
-  const lines: string[] = [];
-  lines.push(`import { ${builderNames.join(", ")} } from "${dialectModule}";`);
-  lines.push("");
-
-  // Generate each table
+  // Generate each table body first, so imports reflect what is actually used
+  const body: string[] = [];
+  let usesSql = false;
   for (let i = 0; i < diagram.tables.length; i++) {
     const table = diagram.tables[i]!;
     const varName = toCamelCase(table.name);
 
-    lines.push(`export const ${varName} = ${tableFunction}("${table.name}", {`);
+    body.push(`export const ${varName} = ${tableFunction}("${table.name}", {`);
 
     for (const field of table.fields) {
-      const colInfo = buildColumnBuilder(field, table, dialect, diagram.tables, fkMap);
+      const colInfo = buildColumnBuilder(field, table, dialect, fkMap);
       const camelFieldName = toCamelCase(field.name);
       const chainStr = colInfo.chains.join("");
-      lines.push(`  ${camelFieldName}: ${colInfo.builder}(${colInfo.args})${chainStr},`);
+      if (chainStr.includes("sql`")) usesSql = true;
+      body.push(`  ${camelFieldName}: ${colInfo.builder}(${colInfo.args})${chainStr},`);
     }
 
-    lines.push("});");
+    body.push("});");
 
     if (i < diagram.tables.length - 1) {
-      lines.push("");
+      body.push("");
     }
   }
+
+  // Build import statements
+  const builderNames = Array.from(usedBuilders).sort();
+  const lines: string[] = [];
+  if (usesSql) {
+    lines.push('import { sql } from "drizzle-orm";');
+  }
+  lines.push(`import { ${builderNames.join(", ")} } from "${dialectModule}";`);
+  lines.push("");
+  lines.push(...body);
 
   return lines.join("\n") + "\n";
 }

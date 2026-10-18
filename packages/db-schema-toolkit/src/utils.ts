@@ -1,5 +1,9 @@
 export function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  // randomUUID only exists in secure contexts; plain-HTTP deployments fall back to Math.random.
+  const random = typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID()
+    : Math.random().toString(36).slice(2, 9);
+  return `${Date.now()}-${random}`;
 }
 
 export const TABLE_COLORS = [

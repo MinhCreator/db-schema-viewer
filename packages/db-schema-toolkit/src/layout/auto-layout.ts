@@ -37,8 +37,8 @@ export function autoLayout(
     if (visited.has(table.id)) continue;
     const component: string[] = [];
     const queue = [table.id];
-    while (queue.length > 0) {
-      const id = queue.shift()!;
+    for (let head = 0; head < queue.length; head++) {
+      const id = queue[head]!;
       if (visited.has(id)) continue;
       visited.add(id);
       component.push(id);
@@ -209,6 +209,15 @@ export function shuffleLayout(tables: DBTable[]): DBTable[] {
   const cols = Math.max(2, Math.ceil(Math.sqrt(tables.length)));
   const shuffled = fisherYatesShuffle(tables);
 
+  // Each row starts below the tallest table of the previous row.
+  const rowTops: number[] = [];
+  let top = 0;
+  for (let start = 0; start < shuffled.length; start += cols) {
+    rowTops.push(top);
+    const rowHeight = Math.max(...shuffled.slice(start, start + cols).map(estimateTableHeight));
+    top += rowHeight + GAP_Y;
+  }
+
   return shuffled.map((table, i) => {
     const col = i % cols;
     const row = Math.floor(i / cols);
@@ -217,7 +226,7 @@ export function shuffleLayout(tables: DBTable[]): DBTable[] {
     return {
       ...table,
       x: col * (TABLE_WIDTH + GAP_X) + jitterX,
-      y: row * (estimateTableHeight(table) + GAP_Y) + jitterY,
+      y: rowTops[row]! + jitterY,
     };
   });
 }

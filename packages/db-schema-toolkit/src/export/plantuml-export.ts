@@ -42,9 +42,10 @@ export function exportDiagramToPlantUML(diagram: Diagram): string {
   }
 
   // Relationships
+  const tablesById = new Map(diagram.tables.map((t) => [t.id, t]));
   for (const rel of diagram.relationships) {
-    const srcTable = diagram.tables.find((t) => t.id === rel.sourceTableId);
-    const tgtTable = diagram.tables.find((t) => t.id === rel.targetTableId);
+    const srcTable = tablesById.get(rel.sourceTableId);
+    const tgtTable = tablesById.get(rel.targetTableId);
     if (!srcTable || !tgtTable) continue;
 
     const srcName = safePUML(srcTable.name);
@@ -62,13 +63,14 @@ export function exportDiagramToPlantUML(diagram: Diagram): string {
         arrow = "||--||";
         break;
       case "one-to-many":
-        arrow = "}o--||";
+        // Parent side has exactly one, child side has zero or more
+        arrow = "||--o{";
         break;
       case "many-to-many":
         arrow = "}o--o{";
         break;
       default:
-        arrow = "}o--||";
+        arrow = "||--o{";
     }
 
     // Parent (target/PK side) on left, child (source/FK side) on right

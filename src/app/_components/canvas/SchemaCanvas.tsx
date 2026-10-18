@@ -235,6 +235,9 @@ function SchemaCanvasInner({
         maxZoom={2}
         defaultViewport={initialViewport ?? { x: 0, y: 0, zoom: 0.8 }}
         onMoveEnd={handleMoveEnd}
+        // Tables belong to the project: the canvas must not delete or connect them on its own.
+        deleteKeyCode={null}
+        nodesConnectable={false}
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} className="!text-border" />

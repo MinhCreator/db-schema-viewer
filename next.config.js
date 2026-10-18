@@ -1,40 +1,29 @@
+import { buildContentSecurityPolicy, SECURITY_HEADERS } from "./src/lib/security/csp.mjs";
+
+const standalone = process.env.NEXT_OUTPUT_MODE === "standalone";
+
 /** @type {import("next").NextConfig} */
 const config = {
-  output:
-    process.env.NEXT_OUTPUT_MODE === "standalone" ? "standalone" : "export",
+  output: standalone ? "standalone" : "export",
   basePath: process.env.NEXT_PUBLIC_BASE_PATH || "",
   transpilePackages: ["db-schema-toolkit"],
   images: {
     unoptimized: true,
   },
   trailingSlash: true,
-  headers: async () => [
+  // A static export cannot send headers: layout.tsx carries the CSP in a <meta> tag.
+  headers: standalone ? async () => [
     {
       source: "/(.*)",
       headers: [
         {
           key: "Content-Security-Policy",
-          value: [
-            "default-src 'self'",
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-            "style-src 'self' 'unsafe-inline'",
-            "img-src 'self' data: blob:",
-            "font-src 'self' data:",
-            "connect-src 'self' https://api.openai.com https://api.anthropic.com https://generativelanguage.googleapis.com https://api.mistral.ai http://localhost:* http://127.0.0.1:*",
-            "worker-src 'self' blob:",
-          ].join("; "),
+          value: buildContentSecurityPolicy({ dev: process.env.NODE_ENV !== "production" }),
         },
-        {
-          key: "X-Content-Type-Options",
-          value: "nosniff",
-        },
-        {
-          key: "Referrer-Policy",
-          value: "strict-origin-when-cross-origin",
-        },
+        ...SECURITY_HEADERS,
       ],
     },
-  ],
+  ] : undefined,
 };
 
 export default config;

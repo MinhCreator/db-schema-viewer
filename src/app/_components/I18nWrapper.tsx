@@ -1,5 +1,6 @@
 "use client";
 
+import "@/lib/zod-jitless";
 import { useEffect } from "react";
 import {
   I18nProvider,
@@ -28,7 +29,7 @@ const LANGUAGES: { value: Locale; label: string; flag: string }[] = [
 ];
 
 function LanguageToggle() {
-  const { locale, setLocale } = useTranslation();
+  const { locale, setLocale, t } = useTranslation();
 
   return (
     <div className="flex items-center gap-1 rounded-lg p-1 text-muted-foreground">
@@ -37,7 +38,7 @@ function LanguageToggle() {
         value={locale}
         onChange={(e) => setLocale(e.target.value as Locale)}
         className="cursor-pointer appearance-none bg-transparent pr-1 text-xs font-medium text-muted-foreground hover:text-foreground focus:outline-none"
-        aria-label="Language"
+        aria-label={t("language.label")}
       >
         {LANGUAGES.map((lang) => (
           <option key={lang.value} value={lang.value}>

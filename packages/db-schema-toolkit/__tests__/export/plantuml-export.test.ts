@@ -131,12 +131,12 @@ describe("exportDiagramToPlantUML", () => {
     expect(puml).toContain("author_id : int <<FK>>");
   });
 
-  it("uses }o--|| notation for one-to-many relationships", () => {
+  it("uses ||--o{ notation for one-to-many relationships", () => {
     const diagram = buildTestDiagram();
     const puml = exportDiagramToPlantUML(diagram);
-    expect(puml).toContain("}o--||");
-    // Parent (users/target) on left, child (posts/source) on right
-    expect(puml).toContain("users }o--|| posts : author_id");
+    expect(puml).toContain("||--o{");
+    // Parent (users/target) on left with exactly one, child (posts/source) on right with many
+    expect(puml).toContain("users ||--o{ posts : author_id");
   });
 
   it("uses ||--|| notation for one-to-one relationships", () => {

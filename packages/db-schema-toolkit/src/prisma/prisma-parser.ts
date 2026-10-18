@@ -7,24 +7,25 @@ interface PrismaField {
   name: string;
   type: string;
   isOptional: boolean;
-  isList: boolean;
   isPrimaryKey: boolean;
   isUnique: boolean;
-  isUpdatedAt: boolean;
   default?: string;
-  relation?: {
-    fields: string[];
-    references: string[];
-  };
   map?: string;
+}
+
+/** A relation field with `@relation(fields: [...], references: [...])`. */
+interface PrismaRelation {
+  targetModel: string;
+  fields: string[];
+  references: string[];
 }
 
 interface PrismaModel {
   name: string;
   dbName?: string;
   fields: PrismaField[];
+  relations: PrismaRelation[];
   compositeId?: string[];
-  compositeUniques?: string[][];
   indexes?: string[][];
 }
 
@@ -104,6 +105,9 @@ function extractModels(content: string, enums: PrismaEnum[]): PrismaModel[] {
   const models: PrismaModel[] = [];
   const modelRegex = /model\s+(\w+)\s*\{/g;
   const enumNames = new Set(enums.map((e) => e.name));
+  const modelNames = new Set(
+    Array.from(content.matchAll(/model\s+(\w+)\s*\{/g), (m) => m[1]!),
+  );
 
   let match;
   while ((match = modelRegex.exec(content)) !== null) {
@@ -112,7 +116,7 @@ function extractModels(content: string, enums: PrismaEnum[]): PrismaModel[] {
     const body = extractBraceBlock(content, startIdx);
     if (!body) continue;
 
-    const model = parseModelBody(modelName, body, enumNames);
+    const model = parseModelBody(modelName, body, enumNames, modelNames);
     models.push(model);
   }
 
@@ -123,10 +127,11 @@ function parseModelBody(
   modelName: string,
   body: string,
   enumNames: Set<string>,
+  modelNames: Set<string>,
 ): PrismaModel {
   const fields: PrismaField[] = [];
+  const relations: PrismaRelation[] = [];
   let compositeId: string[] | undefined;
-  const compositeUniques: string[][] = [];
   const indexes: string[][] = [];
   let dbName: string | undefined;
 
@@ -139,17 +144,6 @@ function parseModelBody(
     const compositeIdMatch = line.match(/@@id\s*\(\s*\[([^\]]+)\]\s*\)/);
     if (compositeIdMatch) {
       compositeId = compositeIdMatch[1]!.split(",").map((s) => s.trim());
-      continue;
-    }
-
-    // @@unique([field1, field2])
-    const compositeUniqueMatch = line.match(
-      /@@unique\s*\(\s*\[([^\]]+)\]\s*\)/,
-    );
-    if (compositeUniqueMatch) {
-      compositeUniques.push(
-        compositeUniqueMatch[1]!.split(",").map((s) => s.trim()),
-      );
       continue;
     }
 
@@ -176,49 +170,32 @@ function parseModelBody(
 
     const fieldName = fieldMatch[1]!;
     const fieldType = fieldMatch[2]!;
-    const isList = !!fieldMatch[3];
     const isOptional = !!fieldMatch[4];
     const attrs = fieldMatch[5] || "";
 
-    // Skip pure relation fields (type is another model and no @relation with fields)
-    const isRelationField =
-      !isScalarType(fieldType) && !enumNames.has(fieldType);
-    if (isRelationField && isList) continue;
+    // Relation fields (type is another model) are not columns. Those with
+    // `@relation(fields: [...], references: [...])` carry the FK definition.
+    if (modelNames.has(fieldType)) {
+      const relationArgs = extractAttributeArgs(attrs, "relation");
+      const relation =
+        relationArgs !== undefined ? parseRelationArgs(relationArgs) : undefined;
+      if (relation) relations.push({ targetModel: fieldType, ...relation });
+      continue;
+    }
 
     const isPK = /@id\b/.test(attrs);
     const isUnique = /@unique\b/.test(attrs);
-    const isUpdatedAt = /@updatedAt\b/.test(attrs);
-
-    const defaultMatch = attrs.match(/@default\s*\(([^)]+)\)/);
-    const defaultValue = defaultMatch ? defaultMatch[1]!.trim() : undefined;
-
-    // Extract @relation
-    let relation: PrismaField["relation"] | undefined;
-    const relationMatch = attrs.match(
-      /@relation\s*\(\s*(?:name:\s*["']\w+["'],?\s*)?(?:fields:\s*\[([^\]]+)\])?\s*,?\s*(?:references:\s*\[([^\]]+)\])?\s*(?:,\s*onDelete:\s*\w+)?\s*(?:,\s*onUpdate:\s*\w+)?\s*\)/,
-    );
-    if (relationMatch && relationMatch[1] && relationMatch[2]) {
-      relation = {
-        fields: relationMatch[1].split(",").map((s) => s.trim()),
-        references: relationMatch[2].split(",").map((s) => s.trim()),
-      };
-    }
+    const defaultValue = extractAttributeArgs(attrs, "default")?.trim() || undefined;
 
     // Extract @map
     const fieldMapMatch = attrs.match(/@map\s*\(\s*["'](\w+)["']\s*\)/);
-
-    // If it's a relation field with @relation(fields: [...], references: [...])
-    // we skip it as a visible field — the FK field itself will be defined separately
-    if (isRelationField && relation) continue;
 
     fields.push({
       name: fieldName,
       type: mapPrismaType(fieldType, enumNames),
       isOptional,
-      isList,
       isPrimaryKey: isPK,
       isUnique,
-      isUpdatedAt,
       default: defaultValue,
       map: fieldMapMatch?.[1],
     });
@@ -236,8 +213,8 @@ function parseModelBody(
     name: modelName,
     dbName,
     fields,
+    relations,
     compositeId,
-    compositeUniques,
     indexes,
   };
 }
@@ -269,9 +246,36 @@ function resolveRelationships(models: PrismaModel[]): ParsedRelationship[] {
   const relationships: ParsedRelationship[] = [];
   for (const model of models) {
     const sourceTableName = model.dbName || model.name;
+    const coveredFields = new Set<string>();
 
+    // 1. Explicit `@relation(fields: [...], references: [...])`
+    for (const relation of model.relations) {
+      const targetModel = models.find((m) => m.name === relation.targetModel);
+      if (!targetModel) continue;
+      const targetTableName = targetModel.dbName || targetModel.name;
+
+      relation.fields.forEach((fieldName, i) => {
+        const referenceName = relation.references[i];
+        if (referenceName === undefined) return;
+        const field = model.fields.find((f) => f.name === fieldName);
+        const targetField = targetModel.fields.find((f) => f.name === referenceName);
+        if (!field || !targetField) return;
+
+        coveredFields.add(field.name);
+        relationships.push({
+          sourceTable: sourceTableName,
+          sourceColumn: field.map || field.name,
+          targetTable: targetTableName,
+          targetColumn: targetField.map || targetField.name,
+          cardinality:
+            field.isUnique && relation.fields.length === 1 ? "one-to-one" : "one-to-many",
+        });
+      });
+    }
+
+    // 2. Fallback convention: field ending with Id (e.g., authorId) references Author model
     for (const field of model.fields) {
-      // Convention: field ending with Id (e.g., authorId) references Author model
+      if (coveredFields.has(field.name)) continue;
       const idMatch = field.name.match(/^(.+?)Id$/i);
       if (!idMatch) continue;
 
@@ -308,19 +312,82 @@ function resolveRelationships(models: PrismaModel[]): ParsedRelationship[] {
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-function isScalarType(type: string): boolean {
-  const scalars = new Set([
-    "String",
-    "Int",
-    "BigInt",
-    "Float",
-    "Decimal",
-    "Boolean",
-    "DateTime",
-    "Json",
-    "Bytes",
-  ]);
-  return scalars.has(type);
+/**
+ * Return the raw text between the parentheses of `@name(...)`, balancing
+ * nested parentheses and skipping quoted strings. `undefined` if absent.
+ */
+function extractAttributeArgs(attrs: string, name: string): string | undefined {
+  const attrRegex = new RegExp(`@${name}\\s*\\(`);
+  const match = attrRegex.exec(attrs);
+  if (!match) return undefined;
+
+  const start = match.index + match[0].length;
+  let depth = 1;
+  let quote: string | null = null;
+  for (let i = start; i < attrs.length; i++) {
+    const ch = attrs[i]!;
+    if (quote) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "(") depth++;
+    else if (ch === ")" && --depth === 0) return attrs.slice(start, i);
+  }
+  return undefined;
+}
+
+/** Split on commas that are not nested in brackets, parentheses or strings. */
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let current = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    current += ch;
+    if (quote) {
+      if (ch === "\\" && i + 1 < text.length) current += text[++i]!;
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth--;
+    else if (ch === "," && depth === 0) {
+      parts.push(current.slice(0, -1));
+      current = "";
+    }
+  }
+  parts.push(current);
+  return parts.map((p) => p.trim()).filter((p) => p.length > 0);
+}
+
+/**
+ * Parse `@relation` arguments in any order: an optional positional or `name:`
+ * relation name, `fields`, `references`, `onDelete`, `onUpdate` and `map`.
+ * Returns the FK mapping only when both `fields` and `references` are present.
+ */
+function parseRelationArgs(
+  args: string,
+): Pick<PrismaRelation, "fields" | "references"> | undefined {
+  let fields: string[] | undefined;
+  let references: string[] | undefined;
+
+  for (const part of splitTopLevel(args)) {
+    const named = /^(\w+)\s*:\s*([\s\S]*)$/.exec(part);
+    if (!named) continue; // positional relation name
+    const key = named[1]!;
+    const list = /^\[([\s\S]*)\]$/.exec(named[2]!.trim());
+    if (!list) continue;
+    const names = list[1]!
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (key === "fields") fields = names;
+    else if (key === "references") references = names;
+  }
+
+  return fields && references ? { fields, references } : undefined;
 }
 
 function mapPrismaType(type: string, enumNames: Set<string>): string {

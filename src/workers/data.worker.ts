@@ -1,3 +1,4 @@
+import "@/lib/zod-jitless";
 import { parseSQLDump, generateFakeData } from "db-schema-toolkit/data";
 import type { Diagram } from "db-schema-toolkit";
 export type DataRequest = { kind: "dump"; content: string } | { kind: "generate"; diagram: Diagram; seed: number };

@@ -502,3 +502,72 @@ describe("diffSchemas", () => {
     expect(diff.summary).toContain("1 relationship");
   });
 });
+
+describe("diffSchemas — schema-qualified tables", () => {
+  const idField = () => makeField({ name: "id", type: "UUID", primaryKey: true });
+
+  it("treats same-named tables in different schemas as distinct", () => {
+    const before = makeDiagram([
+      makeTable("users", [idField()], { schema: "public" }),
+      makeTable("users", [idField()], { schema: "auth" }),
+    ]);
+    const after = makeDiagram([
+      makeTable("users", [idField()], { schema: "public" }),
+      makeTable("users", [idField(), makeField({ name: "email", type: "TEXT" })], {
+        schema: "auth",
+      }),
+    ]);
+
+    const diff = diffSchemas(before, after);
+
+    expect(diff.addedTables).toEqual([]);
+    expect(diff.removedTables).toEqual([]);
+    expect(diff.modifiedTables).toHaveLength(1);
+    expect(diff.modifiedTables[0]!.tableName).toBe("auth.users");
+    expect(diff.modifiedTables[0]!.addedFields).toEqual(["email"]);
+  });
+
+  it("reports a table moved to another schema as removed and added", () => {
+    const before = makeDiagram([makeTable("users", [idField()], { schema: "public" })]);
+    const after = makeDiagram([makeTable("users", [idField()], { schema: "auth" })]);
+
+    const diff = diffSchemas(before, after);
+
+    expect(diff.removedTables).toEqual(["public.users"]);
+    expect(diff.addedTables).toEqual(["auth.users"]);
+  });
+
+  it("distinguishes relationships whose targets differ only by schema", () => {
+    const build = (targetSchema: "public" | "auth") => {
+      const pubUsers = makeTable("users", [idField()], { schema: "public" });
+      const authUsers = makeTable("users", [idField()], { schema: "auth" });
+      const profiles = makeTable(
+        "profiles",
+        [makeField({ name: "user_id", type: "UUID" })],
+        { schema: "public" },
+      );
+      const target = targetSchema === "auth" ? authUsers : pubUsers;
+      return makeDiagram(
+        [pubUsers, authUsers, profiles],
+        [makeRelationship(profiles, 0, target, 0)],
+      );
+    };
+
+    const diff = diffSchemas(build("public"), build("auth"));
+
+    expect(diff.removedRelationships).toHaveLength(1);
+    expect(diff.removedRelationships[0]!.targetTable).toBe("public.users");
+    expect(diff.addedRelationships).toHaveLength(1);
+    expect(diff.addedRelationships[0]!.targetTable).toBe("auth.users");
+  });
+
+  it("keeps unqualified names for tables without a schema", () => {
+    const before = makeDiagram([makeTable("users", [idField()])]);
+    const after = makeDiagram([makeTable("accounts", [idField()])]);
+
+    const diff = diffSchemas(before, after);
+
+    expect(diff.removedTables).toEqual(["users"]);
+    expect(diff.addedTables).toEqual(["accounts"]);
+  });
+});

@@ -37,7 +37,8 @@ const DETECTION_RULES: DetectionRule[] = [
     patterns: [
       /\bENGINE\s*=\s*(MergeTree|ReplacingMergeTree|SummingMergeTree|AggregatingMergeTree|CollapsingMergeTree|VersionedCollapsingMergeTree|Log|TinyLog|Memory|Buffer|Distributed|Kafka)/i,
       /\bORDER\s+BY\s+\(/i,
-      /\bPARTITION\s+BY\b/i,
+      // PostgreSQL also has PARTITION BY; only count it next to a ClickHouse ENGINE clause
+      /\bENGINE\s*=[^;]*\bPARTITION\s+BY\b/i,
       /\bUInt(?:8|16|32|64|128|256)\b/,
       /\bInt(?:8|16|32|64|128|256)\b/,
       /\bFloat(?:32|64)\b/,
@@ -137,12 +138,17 @@ const DETECTION_RULES: DetectionRule[] = [
     type: "sqlite",
     patterns: [
       /\bAUTOINCREMENT\b/i,
-      /\bINTEGER\s+PRIMARY\s+KEY\b/i,
       /\bPRAGMA\b/i,
       /\bWITHOUT\s+ROWID\b/i,
       /\bSQLITE\b/i,
     ],
     weight: 2,
+  },
+  // SQLite rowid alias: valid in PostgreSQL too, so it only wins when nothing else matches
+  {
+    type: "sqlite",
+    patterns: [/\bINTEGER\s+PRIMARY\s+KEY\b/i],
+    weight: 0.5,
   },
 ];
 

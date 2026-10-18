@@ -28,10 +28,27 @@ self.addEventListener("activate", (event) => {
   })());
 });
 
+// A worker takes its URL from the response. Turbopack starts every worker from the
+// same loader and tells them apart by the URL fragment, which a cached or fetched
+// response would replace with another worker's. A fresh Response has no URL, so the
+// worker keeps the one it was created with.
+async function asWorkerScript(response) {
+  if (!response) return response;
+  return new Response(await response.blob(), { status: response.status, statusText: response.statusText, headers: response.headers });
+}
+
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== self.location.origin || !url.href.startsWith(shellUrl)) return;
-  event.respondWith((async () => {
+  if (event.request.destination === "worker") {
+    event.respondWith(respond(event, url).then(asWorkerScript));
+    return;
+  }
+  event.respondWith(respond(event, url));
+});
+
+function respond(event, url) {
+  return (async () => {
     const cache = await caches.open(CACHE_NAME);
     const immutable = url.pathname.includes("/_next/static/");
     if (immutable) {
@@ -50,5 +67,5 @@ self.addEventListener("fetch", (event) => {
         ?? (event.request.mode === "navigate" ? await cache.match(shellUrl) : undefined)
         ?? new Response("Offline", { status: 503 });
     }
-  })());
-});
+  })();
+}

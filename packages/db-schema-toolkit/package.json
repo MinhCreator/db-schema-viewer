@@ -1,13 +1,13 @@
 {
   "name": "db-schema-toolkit",
-  "version": "1.2.0",
+  "version": "2.1.6",
   "type": "module",
   "description": "Parse, analyze, export, and AI-review database schemas. Supports SQL (PostgreSQL, MySQL, SQLite, and more), Drizzle, Prisma, DBML, TypeORM, MikroORM, Sequelize, and Kysely.",
   "license": "MIT",
   "author": "maxgfr",
   "repository": {
     "type": "git",
-    "url": "https://github.com/maxgfr/db-schema-viewer.git",
+    "url": "git+https://github.com/maxgfr/db-schema-viewer.git",
     "directory": "packages/db-schema-toolkit"
   },
   "homepage": "https://github.com/maxgfr/db-schema-viewer/tree/main/packages/db-schema-toolkit#readme",
@@ -35,28 +35,29 @@
   ],
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
+    "./package.json": "./package.json",
     "./export": {
-      "import": "./dist/export.js",
-      "types": "./dist/export.d.ts"
+      "types": "./dist/export.d.ts",
+      "import": "./dist/export.js"
     },
     "./analysis": {
-      "import": "./dist/analysis.js",
-      "types": "./dist/analysis.d.ts"
+      "types": "./dist/analysis.d.ts",
+      "import": "./dist/analysis.js"
     },
     "./ai": {
-      "import": "./dist/ai.js",
-      "types": "./dist/ai.d.ts"
+      "types": "./dist/ai.d.ts",
+      "import": "./dist/ai.js"
     },
     "./data": {
-      "import": "./dist/data.js",
-      "types": "./dist/data.d.ts"
+      "types": "./dist/data.d.ts",
+      "import": "./dist/data.js"
     }
   },
   "bin": {
-    "db-schema-toolkit": "./dist/cli.js"
+    "db-schema-toolkit": "dist/cli.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -66,9 +67,14 @@
     "llms.txt",
     "PROMPT.md"
   ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "dev:watch": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/ --max-warnings=0",
     "test": "vitest",
@@ -78,14 +84,16 @@
     "zod": "^4.1.13",
     "node-sql-parser": "^5.3.6",
     "lz-string": "^1.5.0",
-    "@faker-js/faker": "^10.3.0"
+    "@faker-js/faker": "^10.5.0",
+    "llm-connect": "^1.1.0"
   },
   "peerDependencies": {
-    "ai": "^5.0.0",
-    "@ai-sdk/openai": "^2.0.0",
-    "@ai-sdk/anthropic": "^2.0.0",
-    "@ai-sdk/google": "^2.0.0",
-    "@ai-sdk/mistral": "^2.0.0"
+    "ai": "^6.0.0",
+    "@ai-sdk/openai": "^3.0.0",
+    "@ai-sdk/anthropic": "^3.0.0",
+    "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/mistral": "^3.0.0",
+    "@ai-sdk/openai-compatible": "^2.0.0"
   },
   "peerDependenciesMeta": {
     "ai": {
@@ -102,12 +110,14 @@
     },
     "@ai-sdk/mistral": {
       "optional": true
+    },
+    "@ai-sdk/openai-compatible": {
+      "optional": true
     }
   },
   "devDependencies": {
-    "oxc-parser": "^0.123.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.1"
+    "vitest": "^4.1.11"
   }
 }

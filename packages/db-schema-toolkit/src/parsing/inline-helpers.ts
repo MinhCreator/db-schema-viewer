@@ -8,42 +8,22 @@ interface FunctionHelper {
   returnBody: string;
 }
 
-interface Replacement {
-  start: number;
-  end: number;
-  text: string;
-}
-
-// Dynamic AST nodes from the parser — flexible access is inherent to tree walking
-type ASTNode = Record<string, any>;
-
 // ══════════════════════════════════════════════════════════════════
 //  Public API
 // ══════════════════════════════════════════════════════════════════
 
 /**
  * Inline helper functions that return object literals into their call sites.
- *
- * Uses the OXC parser (Rust/WASM) for AST-based analysis when available,
- * falling back to regex-based analysis otherwise.
  */
 export function inlineHelperFunctions(content: string): string {
-  try {
-    return astInlineHelperFunctions(content);
-  } catch {
-    return regexInlineHelperFunctions(content);
-  }
+  return regexInlineHelperFunctions(content);
 }
 
 /**
  * Inline constant object literals into their spread sites.
  */
 export function inlineObjectSpreads(content: string): string {
-  try {
-    return astInlineObjectSpreads(content);
-  } catch {
-    return regexInlineObjectSpreads(content);
-  }
+  return regexInlineObjectSpreads(content);
 }
 
 /**
@@ -51,334 +31,10 @@ export function inlineObjectSpreads(content: string): string {
  * Returns a map of className → merged body text (parent + own).
  */
 export function resolveClassInheritance(content: string): Map<string, string> {
-  try {
-    return astResolveClassInheritance(content);
-  } catch {
-    return regexResolveClassInheritance(content);
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════
-//  AST-based implementation (OXC parser — Rust/WASM)
-// ══════════════════════════════════════════════════════════════════
-
-// Lazy-loaded OXC module
-let oxc: { parseSync: (filename: string, source: string, options?: unknown) => { program: ASTNode; errors: unknown[] } } | null = null;
-let oxcLoadFailed = false;
-
-function getOxc() {
-  if (oxc) return oxc;
-  if (oxcLoadFailed) return null;
-  try {
-    // Use indirect require to avoid static analysis by bundlers (webpack/turbopack).
-    // In Node.js: globalThis.process exists and we can dynamically create a require function.
-    // In browser: this throws and we fall back to the regex-based implementation.
-    if (typeof globalThis.process === "undefined") throw new Error("browser");
-    const dynamicRequire = new Function("mod", "return require(mod)") as (mod: string) => typeof oxc;
-    oxc = dynamicRequire("oxc-parser");
-    return oxc;
-  } catch {
-    oxcLoadFailed = true;
-    return null;
-  }
-}
-
-function parseAST(content: string): ASTNode {
-  const parser = getOxc();
-  if (!parser) throw new Error("OXC parser not available");
-  const result = parser.parseSync("schema.ts", content);
-  if (result.errors && result.errors.length > 0) {
-    throw new Error("Parse error");
-  }
-  return result.program;
-}
-
-// ── Generic AST walker ───────────────────────────────────────────
-
-function walkAST(
-  node: ASTNode,
-  visitor: (node: ASTNode, parent: ASTNode | null) => void,
-  parent: ASTNode | null = null,
-): void {
-  if (!node || typeof node !== "object" || !node.type) return;
-  visitor(node, parent);
-  for (const key of Object.keys(node)) {
-    if (key === "start" || key === "end" || key === "type") continue;
-    const child = node[key];
-    if (Array.isArray(child)) {
-      for (const item of child) {
-        if (item && typeof item === "object" && item.type) {
-          walkAST(item, visitor, node);
-        }
-      }
-    } else if (child && typeof child === "object" && child.type) {
-      walkAST(child, visitor, node);
-    }
-  }
-}
-
-// ── AST: Inline helper functions ─────────────────────────────────
-
-function astInlineHelperFunctions(content: string): string {
-  const ast = parseAST(content);
-  const helpers = new Map<string, FunctionHelper>();
-
-  // Collect function helpers from top-level statements
-  for (const stmt of ast.body as ASTNode[]) {
-    collectHelper(stmt, content, helpers);
-  }
-
-  if (helpers.size === 0) return content;
-
-  // Find replacement sites
-  const replacements: Replacement[] = [];
-
-  walkAST(ast, (node, parent) => {
-    // Pattern 1: ArrowFunction whose body is a CallExpression to a known helper
-    // e.g., (d) => helperFunc(d)
-    if (
-      node.type === "ArrowFunctionExpression" &&
-      node.body?.type === "CallExpression" &&
-      node.body.callee?.type === "Identifier"
-    ) {
-      const funcName = node.body.callee.name as string;
-      const helper = helpers.get(funcName);
-      if (!helper) return;
-
-      const callParam = node.params?.[0]?.name as string | undefined;
-      if (!callParam) return;
-
-      const body = renameParam(helper.returnBody, helper.paramName, callParam);
-      // Replace the entire arrow function
-      replacements.push({
-        start: node.start as number,
-        end: node.end as number,
-        text: `(${callParam}) => ({ ${body} })`,
-      });
-    }
-
-    // Pattern 2: SpreadElement whose argument is a CallExpression to a known helper
-    // e.g., ...helperFunc(d) inside an object
-    if (
-      node.type === "SpreadElement" &&
-      node.argument?.type === "CallExpression" &&
-      node.argument.callee?.type === "Identifier" &&
-      parent?.type === "ObjectExpression"
-    ) {
-      const funcName = node.argument.callee.name as string;
-      const helper = helpers.get(funcName);
-      if (!helper) return;
-
-      const callArg = node.argument.arguments?.[0]?.name as string | undefined;
-      if (!callArg) return;
-
-      const body = renameParam(helper.returnBody, helper.paramName, callArg);
-      replacements.push({
-        start: node.start as number,
-        end: node.end as number,
-        text: body,
-      });
-    }
-  });
-
-  return applyReplacements(content, replacements);
-}
-
-function collectHelper(
-  stmt: ASTNode,
-  content: string,
-  helpers: Map<string, FunctionHelper>,
-): void {
-  // Unwrap export: export function / export const
-  let inner = stmt;
-  if (stmt.type === "ExportNamedDeclaration" && stmt.declaration) {
-    inner = stmt.declaration;
-  }
-
-  // function helperName(param) { return { ... }; }
-  if (inner.type === "FunctionDeclaration" && inner.id?.name) {
-    const funcName = inner.id.name as string;
-    const paramName = inner.params?.[0]?.name as string | undefined;
-    if (!paramName) return;
-
-    const returnObj = findReturnObject(inner.body);
-    if (returnObj) {
-      helpers.set(funcName, {
-        paramName,
-        returnBody: content.substring(
-          (returnObj.start as number) + 1,
-          (returnObj.end as number) - 1,
-        ),
-      });
-    }
-  }
-
-  // const helperName = (param) => ({ ... })
-  // const helperName = (param) => { return { ... }; }
-  if (inner.type === "VariableDeclaration") {
-    for (const decl of inner.declarations as ASTNode[]) {
-      if (
-        decl.type !== "VariableDeclarator" ||
-        !decl.id?.name ||
-        !decl.init
-      )
-        continue;
-
-      const funcName = decl.id.name as string;
-      const init = decl.init;
-
-      if (init.type !== "ArrowFunctionExpression" && init.type !== "FunctionExpression")
-        continue;
-
-      const paramName = init.params?.[0]?.name as string | undefined;
-      if (!paramName) return;
-
-      // Arrow with direct object return: (d) => ({ ... })
-      if (init.body?.type === "ObjectExpression") {
-        helpers.set(funcName, {
-          paramName,
-          returnBody: content.substring(
-            (init.body.start as number) + 1,
-            (init.body.end as number) - 1,
-          ),
-        });
-        continue;
-      }
-
-      // Arrow/function with block body: { return { ... }; }
-      if (init.body?.type === "BlockStatement") {
-        const returnObj = findReturnObject(init.body);
-        if (returnObj) {
-          helpers.set(funcName, {
-            paramName,
-            returnBody: content.substring(
-              (returnObj.start as number) + 1,
-              (returnObj.end as number) - 1,
-            ),
-          });
-        }
-      }
-    }
-  }
-}
-
-function findReturnObject(blockStmt: ASTNode): ASTNode | null {
-  if (!blockStmt?.body) return null;
-  for (const stmt of blockStmt.body as ASTNode[]) {
-    if (
-      stmt.type === "ReturnStatement" &&
-      stmt.argument?.type === "ObjectExpression"
-    ) {
-      return stmt.argument;
-    }
-  }
-  return null;
-}
-
-// ── AST: Inline object spreads ───────────────────────────────────
-
-function astInlineObjectSpreads(content: string): string {
-  const ast = parseAST(content);
-  const constObjects = new Map<string, { start: number; end: number }>();
-
-  // Collect const obj = { ... } declarations
-  for (const stmt of ast.body as ASTNode[]) {
-    let inner = stmt;
-    if (stmt.type === "ExportNamedDeclaration" && stmt.declaration) {
-      inner = stmt.declaration;
-    }
-    if (inner.type !== "VariableDeclaration" || inner.kind !== "const") continue;
-
-    for (const decl of inner.declarations as ASTNode[]) {
-      if (decl.init?.type === "ObjectExpression" && decl.id?.name) {
-        // Skip objects containing functions (not simple data objects)
-        const props = decl.init.properties as ASTNode[] | undefined;
-        const hasFunction = props?.some(
-          (p) =>
-            p.value?.type === "FunctionExpression" ||
-            p.value?.type === "ArrowFunctionExpression",
-        );
-        if (hasFunction) continue;
-
-        constObjects.set(decl.id.name as string, {
-          start: (decl.init.start as number) + 1,
-          end: (decl.init.end as number) - 1,
-        });
-      }
-    }
-  }
-
-  if (constObjects.size === 0) return content;
-
-  const replacements: Replacement[] = [];
-
-  walkAST(ast, (node) => {
-    if (
-      node.type === "SpreadElement" &&
-      node.argument?.type === "Identifier"
-    ) {
-      const varName = node.argument.name as string;
-      const objSpan = constObjects.get(varName);
-      if (!objSpan) return;
-
-      replacements.push({
-        start: node.start as number,
-        end: node.end as number,
-        text: content.substring(objSpan.start, objSpan.end),
-      });
-    }
-  });
-
-  return applyReplacements(content, replacements);
-}
-
-// ── AST: Resolve class inheritance ───────────────────────────────
-
-function astResolveClassInheritance(content: string): Map<string, string> {
-  const ast = parseAST(content);
-  const bodies = new Map<string, string>();
-
-  for (const stmt of ast.body as ASTNode[]) {
-    let inner = stmt;
-    if (stmt.type === "ExportNamedDeclaration" && stmt.declaration) {
-      inner = stmt.declaration;
-    }
-    if (inner.type !== "ClassDeclaration" || !inner.id?.name) continue;
-
-    const className = inner.id.name as string;
-    const parentName = inner.superClass?.name as string | undefined;
-
-    // Body is the ClassBody node; extract text between its braces
-    let bodyText = content.substring(
-      (inner.body.start as number) + 1,
-      (inner.body.end as number) - 1,
-    );
-
-    if (parentName) {
-      const parentBody = bodies.get(parentName);
-      if (parentBody) {
-        bodyText = parentBody + "\n" + bodyText;
-      }
-    }
-
-    bodies.set(className, bodyText);
-  }
-
-  return bodies;
+  return regexResolveClassInheritance(content);
 }
 
 // ── Shared utility ───────────────────────────────────────────────
-
-function applyReplacements(content: string, replacements: Replacement[]): string {
-  if (replacements.length === 0) return content;
-  // Apply from end to start to preserve earlier offsets
-  replacements.sort((a, b) => b.start - a.start);
-  let result = content;
-  for (const { start, end, text } of replacements) {
-    result = result.substring(0, start) + text + result.substring(end);
-  }
-  return result;
-}
 
 function renameParam(body: string, oldParam: string, newParam: string): string {
   if (oldParam === newParam) return body;
@@ -393,7 +49,7 @@ function escapeRegExp(str: string): string {
 }
 
 // ══════════════════════════════════════════════════════════════════
-//  Regex-based fallback (no external dependencies)
+//  Regex-based implementation
 // ══════════════════════════════════════════════════════════════════
 
 function regexInlineHelperFunctions(content: string): string {
@@ -431,7 +87,8 @@ function regexInlineObjectSpreads(content: string): string {
       `\\.\\.\\.\\s*${escapeRegExp(varName)}(?!\\w)`,
       "g",
     );
-    content = content.replace(spreadRegex, body);
+    // A replacer function keeps `$&`, `$1`, `$$` in the body literal.
+    content = content.replace(spreadRegex, () => body);
   }
 
   return content;
@@ -484,10 +141,95 @@ function regexExtractFunctionHelpers(content: string): Map<string, FunctionHelpe
 
   const constExprRegex = /(?:export\s+)?const\s+(\w+)\s*=\s*(?:function\s*)?\(/g;
   while ((match = constExprRegex.exec(content)) !== null) {
-    regexProcessFuncCandidate(content, match[1]!, match.index + match[0].length, helpers);
+    const openParen = match.index + match[0].length - 1;
+    regexProcessFuncCandidate(content, match[1]!, openParen + 1, helpers);
+    // A declarator without a usable parameter must not end the scan:
+    // `const now = () => new Date(), cols = (d) => ({ ... })`
+    let next = nextFunctionDeclarator(content, openParen);
+    while (next) {
+      regexProcessFuncCandidate(content, next.name, next.openParen + 1, helpers);
+      next = nextFunctionDeclarator(content, next.openParen);
+    }
   }
 
   return helpers;
+}
+
+const FUNCTION_DECLARATOR = /\s*(\w+)\s*=\s*(?:function\s*)?\(/y;
+
+/**
+ * From the `(` of a declarator's initializer, find the next `name = (` or
+ * `name = function (` declarator of the same declaration. Stops at the end
+ * of the statement.
+ */
+function nextFunctionDeclarator(
+  content: string,
+  from: number,
+): { name: string; openParen: number } | null {
+  let depth = 0;
+  let i = from;
+  while (i < content.length) {
+    const ch = content[i]!;
+    if (ch === '"' || ch === "'" || ch === "`") {
+      i = skipStringLiteral(content, i);
+      continue;
+    }
+    if (ch === "/" && content[i + 1] === "/") {
+      const lineEnd = content.indexOf("\n", i);
+      if (lineEnd === -1) return null;
+      i = lineEnd;
+      continue;
+    }
+    if (ch === "/" && content[i + 1] === "*") {
+      const commentEnd = content.indexOf("*/", i + 2);
+      if (commentEnd === -1) return null;
+      i = commentEnd + 2;
+      continue;
+    }
+    if (ch === "(" || ch === "[" || ch === "{") {
+      depth++;
+    } else if (ch === ")" || ch === "]" || ch === "}") {
+      depth--;
+      if (depth < 0) return null;
+    } else if (depth === 0) {
+      if (ch === ";") return null;
+      if (ch === "\n" && !declarationContinues(content, i)) return null;
+      if (ch === ",") {
+        FUNCTION_DECLARATOR.lastIndex = i + 1;
+        const declarator = FUNCTION_DECLARATOR.exec(content);
+        if (declarator) {
+          return { name: declarator[1]!, openParen: i + declarator[0].length };
+        }
+      }
+    }
+    i++;
+  }
+  return null;
+}
+
+function skipStringLiteral(content: string, quoteIdx: number): number {
+  const quote = content[quoteIdx];
+  let i = quoteIdx + 1;
+  while (i < content.length) {
+    const ch = content[i];
+    if (ch === "\\") {
+      i += 2;
+      continue;
+    }
+    if (ch === quote) return i + 1;
+    i++;
+  }
+  return content.length;
+}
+
+/** A newline continues a declaration only when a comma sits on either side of it. */
+function declarationContinues(content: string, newlineIdx: number): boolean {
+  let before = newlineIdx - 1;
+  while (before >= 0 && /\s/.test(content[before]!)) before--;
+  if (before >= 0 && content[before] === ",") return true;
+  let after = newlineIdx + 1;
+  while (after < content.length && /\s/.test(content[after]!)) after++;
+  return content[after] === ",";
 }
 
 function regexProcessFuncCandidate(

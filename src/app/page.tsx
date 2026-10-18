@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { getStateFromUrl, generateShareUrl, encodeState } from "@/lib/sharing/encode-state";
+import { getStateFromUrl, generateShareUrl } from "@/lib/sharing/encode-state";
 import { createProject, type Project } from "@/lib/project/project";
-import { loadProject } from "@/lib/storage/local-storage";
+import { resolveSharedProject, withoutIdConflict } from "@/lib/storage/local-storage";
 import { useProjectSession } from "@/hooks/use-project-session";
 import { useTheme } from "@/hooks/use-theme";
 import { useTranslation } from "@/lib/i18n/context";
@@ -12,11 +12,14 @@ import { Landing } from "./_components/landing/Landing";
 import { EditorLayout } from "./_components/canvas/EditorLayout";
 
 export default function Home() {
-  const { project, sessionKey, saveStatus, openProject, updateProject, closeProject, flush } = useProjectSession();
+  const { t } = useTranslation();
+  const { project, sessionKey, saveStatus, openProject, updateProject, closeProject, flush } = useProjectSession({
+    confirmDiscard: () => window.confirm(t("project.confirmDiscardUnsaved")),
+    onSourceDropped: () => toast.warning(t("project.sourceDropped")),
+  });
   const [mounted, setMounted] = useState(false);
   const initialized = useRef(false);
   const { theme, mode, toggleTheme } = useTheme();
-  const { t } = useTranslation();
 
   useEffect(() => {
     if (initialized.current) return;
@@ -28,17 +31,8 @@ export default function Home() {
       toast.error(t("page.failedToLoadSharedSchema"), { description: t("page.failedToLoadSharedSchemaDesc") });
       return;
     }
-    const stored = loadProject(shared.diagram.id);
     const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
-    if (navigation?.type === "reload" && stored) {
-      openProject(stored);
-      return;
-    }
-    // Only restore a source belonging to exactly the same shared schema and layout.
-    if (stored?.diagram.sourceContent && encodeState(stored.diagram) === encodeState(shared.diagram)) {
-      shared.diagram.sourceContent = stored.diagram.sourceContent;
-    }
-    openProject({ ...createProject(shared.diagram), ...shared });
+    openProject(resolveSharedProject({ ...createProject(shared.diagram), ...shared }, navigation?.type === "reload"));
   }, [openProject, t]);
 
   useEffect(() => {
@@ -54,9 +48,13 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [project]);
 
-  const handleOpen = useCallback((next: Project) => {
-    if (!openProject(next)) toast.error(t("project.saveError"));
-  }, [openProject, t]);
+  const handleOpen = useCallback((next: Project): boolean => {
+    // Save the current project first so an import is compared with what is really stored.
+    flush();
+    const opened = openProject(withoutIdConflict(next));
+    if (!opened) toast.error(t("project.saveError"));
+    return opened;
+  }, [flush, openProject, t]);
 
   const handleBack = useCallback(() => {
     if (!closeProject()) { toast.error(t("project.saveError")); return; }

@@ -4,15 +4,16 @@ import { buildDiagram } from "../parsing/build-diagram";
 import { extractBraceBlock } from "../parsing/extract-brace-block";
 import { inlineHelperFunctions } from "../parsing/inline-helpers";
 
+type DrizzleDialect = "pg" | "mysql" | "sqlite" | "unknown";
+
 interface DrizzleTable {
   variableName: string;
   tableName: string;
-  dialect: "pg" | "mysql" | "sqlite" | "unknown";
   columns: ParsedColumn[];
   indexes: { name: string; columns: string[]; unique: boolean }[];
 }
 
-interface CallbackRef {
+interface ColumnRef {
   sourceTableName: string;
   sourceColumn: string;
   targetVar: string;
@@ -41,11 +42,11 @@ export function parseDrizzleSchema(content: string, name?: string): Diagram {
   // Extract enum definitions (for callback-syntax type resolution)
   const enumMap = extractPgEnums(content);
 
-  // Extract tables (returns callback-style references that need resolution)
-  const callbackRefs = extractDrizzleTables(content, tables, enumMap);
+  // Extract tables (returns `.references()` targets that need resolution)
+  const columnRefs = extractDrizzleTables(content, tables, enumMap);
 
-  // Resolve callback references (variable name → table name)
-  for (const ref of callbackRefs) {
+  // Resolve column references (variable name → table name)
+  for (const ref of columnRefs) {
     const targetTable = tables.find((t) => t.variableName === ref.targetVar);
     const targetTableName = targetTable ? targetTable.tableName : ref.targetVar;
     const sourceTable = tables.find((t) => t.tableName === ref.sourceTableName);
@@ -63,11 +64,11 @@ export function parseDrizzleSchema(content: string, name?: string): Diagram {
     });
   }
 
-  // Extract inline references (`.references(() => table.column)`) — old syntax
-  extractInlineReferences(content, tables, relationships);
-
   // Extract explicit relations (`relations(...)`)
   extractExplicitRelations(content, tables, relationships);
+
+  // Everything above is keyed by TypeScript property; the diagram shows SQL names.
+  applySqlColumnNames(tables, relationships);
 
   // Convert to Diagram via shared builder
   const parsedTables = tables.map((dt) => ({
@@ -79,6 +80,34 @@ export function parseDrizzleSchema(content: string, name?: string): Diagram {
   }));
 
   return buildDiagram(parsedTables, relationships, databaseType, name ?? "Drizzle Schema");
+}
+
+// ── SQL column names ──────────────────────────────────────────────
+
+/** SQL name given as the first argument of the type call, e.g. `integer("author_id")`. */
+const sqlColumnNames = new WeakMap<ParsedColumn, string>();
+
+function applySqlColumnNames(tables: DrizzleTable[], relationships: ParsedRelationship[]): void {
+  const namesByTable = new Map(
+    tables.map((t) => [t.tableName, new Map(t.columns.map((c) => [c.name, sqlColumnNames.get(c) ?? c.name]))]),
+  );
+  const sqlName = (table: string, key: string) => namesByTable.get(table)?.get(key) ?? key;
+
+  for (const rel of relationships) {
+    rel.sourceColumn = sqlName(rel.sourceTable, rel.sourceColumn);
+    rel.targetColumn = sqlName(rel.targetTable, rel.targetColumn);
+  }
+  for (const table of tables) {
+    for (const index of table.indexes) {
+      index.columns = index.columns.map((key) => sqlName(table.tableName, key));
+    }
+    for (const column of table.columns) {
+      if (column.references) {
+        column.references = { ...column.references, column: sqlName(column.references.table, column.references.column) };
+      }
+      column.name = sqlName(table.tableName, column.name);
+    }
+  }
 }
 
 // ── Import stripping ──────────────────────────────────────────────
@@ -106,7 +135,7 @@ function stripTypeScriptImports(content: string): string {
 
 // ── Dialect detection ──────────────────────────────────────────────
 
-function detectDrizzleDialect(content: string): DrizzleTable["dialect"] {
+function detectDrizzleDialect(content: string): DrizzleDialect {
   if (/from\s+["']drizzle-orm\/pg-core["']/.test(content)) return "pg";
   if (/from\s+["']drizzle-orm\/mysql-core["']/.test(content)) return "mysql";
   if (/from\s+["']drizzle-orm\/sqlite-core["']/.test(content)) return "sqlite";
@@ -116,7 +145,7 @@ function detectDrizzleDialect(content: string): DrizzleTable["dialect"] {
   return "unknown";
 }
 
-function drizzleDialectToDBType(dialect: DrizzleTable["dialect"]): DatabaseType {
+function drizzleDialectToDBType(dialect: DrizzleDialect): DatabaseType {
   switch (dialect) {
     case "pg": return "postgresql";
     case "mysql": return "mysql";
@@ -143,8 +172,8 @@ function extractDrizzleTables(
   content: string,
   tables: DrizzleTable[],
   enumMap: Map<string, string>,
-): CallbackRef[] {
-  const callbackRefs: CallbackRef[] = [];
+): ColumnRef[] {
+  const columnRefs: ColumnRef[] = [];
 
   // Match: export const users = pgTable('users', { ... })
   // Also: const users = mysqlTable("users", { ... })
@@ -155,17 +184,8 @@ function extractDrizzleTables(
   let match;
   while ((match = tableRegex.exec(content)) !== null) {
     const variableName = match[1]!;
-    const tableFunc = match[2] || match[3];
     const tableName = match[4]!;
     const callbackParam = match[5]; // e.g., 'd' — undefined for old syntax
-
-    let dialect: DrizzleTable["dialect"] = "unknown";
-    if (tableFunc) {
-      const lower = tableFunc.toLowerCase();
-      if (lower === "pg" || lower.includes("pg")) dialect = "pg";
-      else if (lower === "mysql" || lower.includes("mysql")) dialect = "mysql";
-      else if (lower === "sqlite" || lower.includes("sqlite")) dialect = "sqlite";
-    }
 
     // Extract the table body using brace counting
     const startIdx = content.indexOf("{", match.index + match[0].length - 1);
@@ -174,20 +194,11 @@ function extractDrizzleTables(
     const body = extractBraceBlock(content, startIdx);
     if (!body) continue;
 
-    let columns: ParsedColumn[];
-    if (callbackParam) {
-      const result = parseDrizzleCallbackColumns(body, callbackParam, enumMap);
-      columns = result.columns;
-      for (const ref of result.refs) {
-        callbackRefs.push({
-          sourceTableName: tableName,
-          sourceColumn: ref.sourceColumn,
-          targetVar: ref.targetVar,
-          targetColumn: ref.targetColumn,
-        });
-      }
-    } else {
-      columns = parseDrizzleColumns(body);
+    const { columns, refs } = callbackParam
+      ? parseDrizzleCallbackColumns(body, callbackParam, enumMap)
+      : parseDrizzleColumns(body);
+    for (const ref of refs) {
+      columnRefs.push({ sourceTableName: tableName, ...ref });
     }
 
     // Extract constraints from the 3rd argument: (t) => [ primaryKey(...), unique(...), index(...) ]
@@ -197,13 +208,12 @@ function extractDrizzleTables(
     tables.push({
       variableName,
       tableName,
-      dialect,
       columns,
       indexes: constraintResult.indexes,
     });
   }
 
-  return callbackRefs;
+  return columnRefs;
 }
 
 // ── Constraint extraction (3rd argument) ─────────────────────────
@@ -290,48 +300,141 @@ function extractTableConstraints(
   return { indexes };
 }
 
-// ── Column parsing (object syntax) ────────────────────────────────
+// ── Modifier chains ───────────────────────────────────────────────
 
-function parseDrizzleColumns(body: string): ParsedColumn[] {
-  const columns: ParsedColumn[] = [];
+interface ChainCall {
+  name: string;
+  args: string;
+}
 
-  const colRegex =
-    /(\w+)\s*:\s*(\w+)\s*\(([^)]*)\)((?:\s*\.\s*\w+\s*\([^)]*\))*)/g;
+type ColumnTarget = Omit<ColumnRef, "sourceTableName">;
 
-  let match;
-  while ((match = colRegex.exec(body)) !== null) {
-    const fieldName = match[1]!;
-    const typeFn = match[2]!;
-    const modifiers = match[4] || "";
+const SKIPPED_TYPE_FNS = ["primaryKey", "foreignKey", "uniqueIndex", "index", "unique"];
 
-    if (["primaryKey", "foreignKey", "uniqueIndex", "index", "unique"].includes(typeFn)) {
-      continue;
+/** Index just past the string literal opening at `start`, or -1 if unterminated. */
+function skipStringLiteral(text: string, start: number): number {
+  const quote = text[start];
+  for (let i = start + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\\") i++;
+    else if (ch === quote) return i + 1;
+  }
+  return -1;
+}
+
+/** Index of the `)` matching the `(` at `openIdx`, ignoring string contents; -1 if unbalanced. */
+function findClosingParen(text: string, openIdx: number): number {
+  let depth = 0;
+  for (let i = openIdx; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const end = skipStringLiteral(text, i);
+      if (end === -1) return -1;
+      i = end - 1;
+    } else if (ch === "(") {
+      depth++;
+    } else if (ch === ")") {
+      depth--;
+      if (depth === 0) return i;
     }
+  }
+  return -1;
+}
 
-    const isPK = /\.primaryKey\s*\(/.test(modifiers) || typeFn === "serial" || typeFn === "bigserial";
-    const isNotNull = /\.notNull\s*\(/.test(modifiers);
-    const isUnique = /\.unique\s*\(/.test(modifiers);
+/** Read the `.name(args)` calls chained from `startIdx`, with balanced parentheses. */
+function parseCallChain(text: string, startIdx: number): { calls: ChainCall[]; end: number } {
+  const calls: ChainCall[] = [];
+  const callRegex = /\s*\.\s*([\w$]+)\s*\(/y;
+  let pos = startIdx;
+  for (;;) {
+    callRegex.lastIndex = pos;
+    const match = callRegex.exec(text);
+    if (!match) break;
+    const openIdx = pos + match[0].length - 1;
+    const closeIdx = findClosingParen(text, openIdx);
+    if (closeIdx === -1) break;
+    calls.push({ name: match[1]!, args: text.substring(openIdx + 1, closeIdx) });
+    pos = closeIdx + 1;
+  }
+  return { calls, end: pos };
+}
 
-    let defaultValue: string | undefined;
-    const defaultStringMatch = /\.default\s*\(\s*["'`]([^"'`]*)["'`]\s*\)/.exec(modifiers);
-    const defaultNumberMatch = /\.default\s*\(\s*(-?\d+(?:\.\d+)?)\s*\)/.exec(modifiers);
-    if (defaultStringMatch) {
-      defaultValue = defaultStringMatch[1];
-    } else if (defaultNumberMatch) {
-      defaultValue = defaultNumberMatch[1];
-    }
+/**
+ * Build a column from its type function and the calls chained after it.
+ * `typeOpenIdx` points at the `(` of the type call inside `text`.
+ */
+function buildColumn(
+  fieldName: string,
+  typeFn: string,
+  text: string,
+  typeOpenIdx: number,
+): { column: ParsedColumn; ref?: ColumnTarget; end: number } | null {
+  const typeCloseIdx = findClosingParen(text, typeOpenIdx);
+  if (typeCloseIdx === -1) return null;
+  const { calls, end } = parseCallChain(text, typeCloseIdx + 1);
+  const has = (name: string) => calls.some((c) => c.name === name);
 
-    columns.push({
-      name: fieldName,
-      type: mapDrizzleType(typeFn),
-      primaryKey: isPK,
-      unique: isUnique,
-      nullable: !isNotNull && !isPK,
-      default: defaultValue,
-    });
+  const isPK = has("primaryKey") || typeFn === "serial" || typeFn === "bigserial";
+
+  let defaultValue: string | undefined;
+  const defaultArgs = calls.find((c) => c.name === "default")?.args.trim();
+  if (defaultArgs !== undefined) {
+    const stringMatch = /^["'`]([^"'`]*)["'`]$/.exec(defaultArgs);
+    const numberMatch = /^-?\d+(?:\.\d+)?$/.exec(defaultArgs);
+    defaultValue = stringMatch ? stringMatch[1] : numberMatch?.[0];
   }
 
-  return columns;
+  const column: ParsedColumn = {
+    name: fieldName,
+    type: mapDrizzleType(typeFn),
+    primaryKey: isPK,
+    unique: has("unique"),
+    nullable: !has("notNull") && !isPK,
+    default: defaultValue,
+  };
+  const sqlName = /^\s*["'`]([^"'`]+)["'`]/.exec(text.slice(typeOpenIdx + 1, typeCloseIdx))?.[1];
+  if (sqlName) sqlColumnNames.set(column, sqlName);
+
+  // .references(() => table.column) or .references(() => table.column, { onDelete: ... })
+  const refArgs = calls.find((c) => c.name === "references")?.args;
+  const refMatch = refArgs
+    ? /^\s*\(\s*\)\s*=>\s*(\w+)\.(\w+)\s*(?:,|$)/.exec(refArgs)
+    : null;
+  const ref = refMatch
+    ? { sourceColumn: fieldName, targetVar: refMatch[1]!, targetColumn: refMatch[2]! }
+    : undefined;
+
+  return { column, ref, end };
+}
+
+// ── Column parsing (object syntax) ────────────────────────────────
+
+function parseDrizzleColumns(body: string): {
+  columns: ParsedColumn[];
+  refs: ColumnTarget[];
+} {
+  const columns: ParsedColumn[] = [];
+  const refs: ColumnTarget[] = [];
+
+  const colStartRegex = /(\w+)\s*:\s*(\w+)\s*\(/g;
+
+  let match;
+  while ((match = colStartRegex.exec(body)) !== null) {
+    const fieldName = match[1]!;
+    const typeFn = match[2]!;
+    const typeOpenIdx = match.index + match[0].length - 1;
+
+    const built = buildColumn(fieldName, typeFn, body, typeOpenIdx);
+    if (!built) continue;
+    colStartRegex.lastIndex = built.end;
+
+    if (SKIPPED_TYPE_FNS.includes(typeFn)) continue;
+
+    columns.push(built.column);
+    if (built.ref) refs.push(built.ref);
+  }
+
+  return { columns, refs };
 }
 
 // ── Column parsing (callback syntax) ──────────────────────────────
@@ -364,10 +467,10 @@ function parseDrizzleCallbackColumns(
   enumMap: Map<string, string>,
 ): {
   columns: ParsedColumn[];
-  refs: { sourceColumn: string; targetVar: string; targetColumn: string }[];
+  refs: ColumnTarget[];
 } {
   const columns: ParsedColumn[] = [];
-  const refs: { sourceColumn: string; targetVar: string; targetColumn: string }[] = [];
+  const refs: ColumnTarget[] = [];
 
   const fields = splitAtTopLevelCommas(body);
 
@@ -384,114 +487,32 @@ function parseDrizzleCallbackColumns(
     const callbackTypeRegex = new RegExp(
       `:\\s*${paramName}\\s*\\.\\s*(\\w+)\\s*\\(`,
     );
-    const typeMatch = callbackTypeRegex.exec(trimmed);
-    let typeFn: string;
+    const callbackMatch = callbackTypeRegex.exec(trimmed);
+    // Otherwise a standalone function (e.g., pgEnum): fieldName: enumFn(...)
+    const typeMatch = callbackMatch ?? /:\s*(\w+)\s*\(/.exec(trimmed);
+    if (!typeMatch) continue;
 
-    if (typeMatch) {
-      typeFn = typeMatch[1]!;
-    } else {
-      // Try standalone function (e.g., pgEnum): fieldName: enumFn(...)
-      const standaloneMatch = /:\s*(\w+)\s*\(/.exec(trimmed);
-      if (!standaloneMatch) continue;
-      typeFn = standaloneMatch[1]!;
+    let typeFn = typeMatch[1]!;
+    if (!callbackMatch) {
       const enumName = enumMap.get(typeFn);
       if (enumName) {
         typeFn = enumName;
       }
     }
 
-    if (
-      ["primaryKey", "foreignKey", "uniqueIndex", "index", "unique"].includes(typeFn)
-    ) {
+    if (SKIPPED_TYPE_FNS.includes(typeFn)) {
       continue;
     }
 
-    const isPK =
-      /\.primaryKey\s*\(/.test(trimmed) ||
-      typeFn === "serial" ||
-      typeFn === "bigserial";
-    const isNotNull = /\.notNull\s*\(/.test(trimmed);
-    const isUnique = /\.unique\s*\(/.test(trimmed);
+    const typeOpenIdx = typeMatch.index + typeMatch[0].length - 1;
+    const built = buildColumn(fieldName, typeFn, trimmed, typeOpenIdx);
+    if (!built) continue;
 
-    // Extract .default(...) value
-    let defaultValue: string | undefined;
-    const defaultStringMatch = /\.default\s*\(\s*["'`]([^"'`]*)["'`]\s*\)/.exec(trimmed);
-    const defaultNumberMatch = /\.default\s*\(\s*(-?\d+(?:\.\d+)?)\s*\)/.exec(trimmed);
-    if (defaultStringMatch) {
-      defaultValue = defaultStringMatch[1];
-    } else if (defaultNumberMatch) {
-      defaultValue = defaultNumberMatch[1];
-    }
-
-    const col: ParsedColumn = {
-      name: fieldName,
-      type: mapDrizzleType(typeFn),
-      primaryKey: isPK,
-      unique: isUnique,
-      nullable: !isNotNull && !isPK,
-      default: defaultValue,
-    };
-
-    // Check for .references(() => varName.col)
-    const refMatch = /\.references\s*\(\s*\(\)\s*=>\s*(\w+)\.(\w+)/.exec(trimmed);
-    if (refMatch) {
-      refs.push({
-        sourceColumn: fieldName,
-        targetVar: refMatch[1]!,
-        targetColumn: refMatch[2]!,
-      });
-    }
-
-    columns.push(col);
+    columns.push(built.column);
+    if (built.ref) refs.push(built.ref);
   }
 
   return { columns, refs };
-}
-
-// ── Inline references (old syntax, whole-file scan) ───────────────
-
-function extractInlineReferences(
-  content: string,
-  tables: DrizzleTable[],
-  relationships: ParsedRelationship[],
-): void {
-  for (const table of tables) {
-    const tableDefRegex = new RegExp(
-      `(?:export\\s+)?const\\s+${table.variableName}\\s*=`,
-    );
-    const tableMatch = tableDefRegex.exec(content);
-    if (!tableMatch) continue;
-
-    const startIdx = content.indexOf("{", tableMatch.index);
-    if (startIdx === -1) continue;
-    const body = extractBraceBlock(content, startIdx);
-    if (!body) continue;
-
-    const refRegex =
-      /(\w+)\s*:\s*\w+\s*\([^)]*\)(?:\s*\.\s*\w+\s*\([^)]*\))*\s*\.references\s*\(\s*\(\)\s*=>\s*(\w+)\.(\w+)\s*\)/g;
-
-    let refMatch;
-    while ((refMatch = refRegex.exec(body)) !== null) {
-      const sourceColumn = refMatch[1]!;
-      const targetVar = refMatch[2]!;
-      const targetColumn = refMatch[3]!;
-
-      const targetTable = tables.find((t) => t.variableName === targetVar);
-      const targetTableName = targetTable ? targetTable.tableName : targetVar;
-
-      relationships.push({
-        sourceTable: table.tableName,
-        sourceColumn,
-        targetTable: targetTableName,
-        targetColumn,
-      });
-
-      const col = table.columns.find((c) => c.name === sourceColumn);
-      if (col) {
-        col.references = { table: targetTableName, column: targetColumn };
-      }
-    }
-  }
 }
 
 // ── Explicit relations() blocks ───────────────────────────────────

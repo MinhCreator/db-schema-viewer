@@ -5,13 +5,20 @@ import { toCamelCase } from "./case-utils";
  * Naively singularize a word (handles common English plural suffixes).
  */
 function singularize(word: string): string {
-  if (word.endsWith("ies")) {
+  const lower = word.toLowerCase();
+  if (lower.endsWith("ies") && word.length > 3) {
     return word.slice(0, -3) + "y";
   }
-  if (word.endsWith("ses") || word.endsWith("xes") || word.endsWith("zes") || word.endsWith("ches") || word.endsWith("shes")) {
+  // classes -> class, boxes -> box, matches -> match, wishes -> wish
+  if (/(ss|x|ch|sh)es$/.test(lower)) {
     return word.slice(0, -2);
   }
-  if (word.endsWith("s") && !word.endsWith("ss") && !word.endsWith("us") && !word.endsWith("is")) {
+  // statuses -> status, buses -> bus (but houses -> house, causes -> cause)
+  if (lower.endsWith("uses") && !/[ao]uses$/.test(lower)) {
+    return word.slice(0, -2);
+  }
+  // courses -> course, cases -> case, sizes -> size
+  if (lower.endsWith("s") && !lower.endsWith("ss") && !lower.endsWith("us") && !lower.endsWith("is")) {
     return word.slice(0, -1);
   }
   return word;
@@ -119,10 +126,10 @@ function mapSqlTypeToPrisma(sqlType: string): string {
 /**
  * Build Prisma attribute annotations for a field.
  */
-function buildFieldAttributes(field: DBField): string {
+function buildFieldAttributes(field: DBField, compositePrimaryKey: boolean): string {
   const attrs: string[] = [];
 
-  if (field.primaryKey) {
+  if (field.primaryKey && !compositePrimaryKey) {
     attrs.push("@id");
   }
 
@@ -170,9 +177,10 @@ interface RelationInfo {
  */
 function gatherRelations(diagram: Diagram): RelationInfo[] {
   const result: RelationInfo[] = [];
+  const tablesById = new Map(diagram.tables.map((t) => [t.id, t]));
   for (const rel of diagram.relationships) {
-    const sourceTable = diagram.tables.find((t) => t.id === rel.sourceTableId);
-    const targetTable = diagram.tables.find((t) => t.id === rel.targetTableId);
+    const sourceTable = tablesById.get(rel.sourceTableId);
+    const targetTable = tablesById.get(rel.targetTableId);
     if (!sourceTable || !targetTable) continue;
     const sourceField = sourceTable.fields.find((f) => f.id === rel.sourceFieldId);
     const targetField = targetTable.fields.find((f) => f.id === rel.targetFieldId);
@@ -200,6 +208,26 @@ function countRelationsBetween(relations: RelationInfo[], tableA: string, tableB
   ).length;
 }
 
+/** Return `base`, or `base2`, `base3`, ... — the first name not yet taken in the model. */
+function uniqueName(base: string, taken: Set<string>): string {
+  let name = base;
+  let n = 2;
+  while (taken.has(name)) {
+    name = `${base}${n}`;
+    n++;
+  }
+  taken.add(name);
+  return name;
+}
+
+/** Relation field name derived from the FK column: `author_id` -> `author`, `created_by` -> `createdByUser`. */
+function relationFieldBase(rel: RelationInfo): string {
+  const fkFieldCamel = toCamelCase(rel.sourceField.name);
+  const stripped = fkFieldCamel.replace(/Id$/, "");
+  if (stripped && stripped !== fkFieldCamel) return stripped;
+  return `${fkFieldCamel}${toPascalCase(rel.targetTable.name)}`;
+}
+
 export function exportDiagramToPrisma(diagram: Diagram): string {
   const lines: string[] = [];
   const provider = mapDatabaseTypeToProvider(diagram.databaseType);
@@ -218,18 +246,33 @@ export function exportDiagramToPrisma(diagram: Diagram): string {
 
   const allRelations = gatherRelations(diagram);
 
+  // Name each relation's forward field once, so the reverse side can refer to it.
+  const forwardNames = new Map<RelationInfo, string>();
+  const takenByTable = new Map<string, Set<string>>();
+  for (const table of diagram.tables) {
+    takenByTable.set(table.id, new Set(table.fields.map((f) => toCamelCase(f.name))));
+  }
+  for (const rel of allRelations) {
+    const taken = takenByTable.get(rel.sourceTable.id)!;
+    forwardNames.set(rel, uniqueName(relationFieldBase(rel), taken));
+  }
+
   // Generate each model
   for (const table of diagram.tables) {
     lines.push("");
     const modelName = toPascalCase(table.name);
     lines.push(`model ${modelName} {`);
 
+    const pkFields = table.fields.filter((f) => f.primaryKey);
+    const compositePrimaryKey = pkFields.length > 1;
+    const taken = takenByTable.get(table.id)!;
+
     // Regular scalar fields
     for (const field of table.fields) {
       const prismaType = mapSqlTypeToPrisma(field.type);
       const camelName = toCamelCase(field.name);
       const nullable = field.nullable && !field.primaryKey ? "?" : "";
-      const attrs = buildFieldAttributes(field);
+      const attrs = buildFieldAttributes(field, compositePrimaryKey);
       lines.push(`  ${camelName} ${prismaType}${nullable}${attrs}`);
     }
 
@@ -239,12 +282,7 @@ export function exportDiagramToPrisma(diagram: Diagram): string {
       const targetModelName = toPascalCase(rel.targetTable.name);
       const fkFieldCamel = toCamelCase(rel.sourceField.name);
       const targetFieldCamel = toCamelCase(rel.targetField.name);
-      // Derive the relation field name from the FK field name
-      let relationFieldName = fkFieldCamel.replace(/Id$/, "");
-      if (relationFieldName === fkFieldCamel) {
-        // FK field didn't end with Id, use target table name in camelCase
-        relationFieldName = toCamelCase(rel.targetTable.name);
-      }
+      const relationFieldName = forwardNames.get(rel)!;
 
       const needsName = countRelationsBetween(allRelations, rel.sourceTable.id, rel.targetTable.id) > 1;
       const relationAttrParts = [`fields: [${fkFieldCamel}]`, `references: [${targetFieldCamel}]`];
@@ -262,16 +300,25 @@ export function exportDiagramToPrisma(diagram: Diagram): string {
       const sourceModelName = toPascalCase(rel.sourceTable.name);
       const needsName = countRelationsBetween(allRelations, rel.sourceTable.id, rel.targetTable.id) > 1;
       const nameAttr = needsName ? `("${rel.relationshipId}")` : "";
+      // With several relations to the same table, qualify by the forward field: messagesAsSender.
+      const qualifier = needsName
+        ? `As${forwardNames.get(rel)!.charAt(0).toUpperCase()}${forwardNames.get(rel)!.slice(1)}`
+        : "";
 
       if (rel.cardinality === "one-to-one") {
         // Singular: use the singularized model name in camelCase
-        const reverseFieldName = sourceModelName.charAt(0).toLowerCase() + sourceModelName.slice(1);
+        const base = sourceModelName.charAt(0).toLowerCase() + sourceModelName.slice(1) + qualifier;
+        const reverseFieldName = uniqueName(base, taken);
         lines.push(`  ${reverseFieldName} ${sourceModelName}?${nameAttr ? ` @relation${nameAttr}` : ""}`);
       } else {
         // one-to-many or many-to-many: array - use table name directly (usually already plural)
-        const reverseFieldName = toCamelCase(rel.sourceTable.name);
+        const reverseFieldName = uniqueName(toCamelCase(rel.sourceTable.name) + qualifier, taken);
         lines.push(`  ${reverseFieldName} ${sourceModelName}[]${nameAttr ? ` @relation${nameAttr}` : ""}`);
       }
+    }
+
+    if (compositePrimaryKey) {
+      lines.push(`  @@id([${pkFields.map((f) => toCamelCase(f.name)).join(", ")}])`);
     }
 
     // @@map if the model name differs from the table name

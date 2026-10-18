@@ -145,4 +145,36 @@ describe("example schemas", () => {
       expect(diagram.relationships.length).toBeGreaterThanOrEqual(5);
     });
   });
+
+  describe("cross-format consistency", () => {
+    // The four examples describe the same schema, so they must parse to the same shape.
+    function shape(filename: string) {
+      const diagram = parseSchemaFile(readExample(filename), filename);
+      const byId = new Map(diagram.tables.map((t) => [t.id, t]));
+      const fieldName = (tableId: string, fieldId: string) =>
+        `${byId.get(tableId)!.name}.${byId.get(tableId)!.fields.find((f) => f.id === fieldId)!.name}`;
+      return {
+        columns: diagram.tables.flatMap((t) => t.fields.map((f) => `${t.name}.${f.name}`)).sort(),
+        relationships: diagram.relationships
+          .map((r) => `${fieldName(r.sourceTableId, r.sourceFieldId)} -> ${fieldName(r.targetTableId, r.targetFieldId)}`)
+          .sort(),
+      };
+    }
+
+    const reference = shape("schema.prisma");
+
+    it.each(["schema.dbml", "schema.drizzle.ts"])("%s matches the Prisma example", (filename) => {
+      const other = shape(filename);
+      expect(other.columns).toEqual(reference.columns);
+      expect(other.relationships).toEqual(reference.relationships);
+    });
+
+    it("schema.typeorm.ts matches the Prisma example", () => {
+      const other = shape("schema.typeorm.ts");
+      // TypeORM derives post_hashtags from @JoinTable, which has no surrogate id;
+      // the Prisma example declares it as a model with one.
+      expect(other.columns).toEqual(reference.columns.filter((c) => c !== "post_hashtags.id"));
+      expect(other.relationships).toEqual(reference.relationships);
+    });
+  });
 });

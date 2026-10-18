@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { X, Copy, FileCode } from "lucide-react";
@@ -14,10 +14,26 @@ interface SourceViewerProps {
 
 export function SourceViewer({ sourceContent, diagramName, onClose }: SourceViewerProps) {
   const { t } = useTranslation();
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(sourceContent).then(() => {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Move focus into the dialog and give it back to the opener when it closes.
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => {
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(sourceContent);
       toast.success(t("source.copied"));
-    });
+    } catch (error) {
+      toast.error(t("source.copyFailed"), {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    }
   }, [sourceContent, t]);
 
   const lineCount = sourceContent.split("\n").length;
@@ -30,7 +46,12 @@ export function SourceViewer({ sourceContent, diagramName, onClose }: SourceView
       />
       <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-4">
         <div
-          className="animate-scale-in pointer-events-auto flex w-full max-w-3xl flex-col rounded-2xl border border-border bg-card shadow-2xl"
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="source-viewer-title"
+          tabIndex={-1}
+          className="animate-scale-in pointer-events-auto flex w-full max-w-3xl flex-col rounded-2xl border border-border bg-card shadow-2xl focus:outline-none"
           style={{ maxHeight: "80vh" }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -38,10 +59,10 @@ export function SourceViewer({ sourceContent, diagramName, onClose }: SourceView
           <div className="flex items-center justify-between border-b border-border px-6 py-4">
             <div className="flex items-center gap-3">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-500/10">
-                <FileCode className="h-4.5 w-4.5 text-indigo-400" />
+                <FileCode className="h-4.5 w-4.5 text-indigo-400" aria-hidden="true" />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-foreground">{t("source.title")}</h2>
+                <h2 id="source-viewer-title" className="text-lg font-bold text-foreground">{t("source.title")}</h2>
                 <p className="text-xs text-muted-foreground">
                   {t("source.lines", { name: diagramName, count: lineCount })}
                 </p>
@@ -49,6 +70,7 @@ export function SourceViewer({ sourceContent, diagramName, onClose }: SourceView
             </div>
             <div className="flex items-center gap-2">
               <button
+                type="button"
                 onClick={handleCopy}
                 className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
@@ -56,8 +78,11 @@ export function SourceViewer({ sourceContent, diagramName, onClose }: SourceView
                 {t("common.copy")}
               </button>
               <button
+                type="button"
                 onClick={onClose}
                 className="rounded-lg p-2 transition-colors hover:bg-accent"
+                aria-label={t("source.close")}
+                title={t("source.close")}
               >
                 <X className="h-5 w-5 text-muted-foreground" />
               </button>

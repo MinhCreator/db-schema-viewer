@@ -39,11 +39,19 @@ function normalize(name: string): string {
   return name.toLowerCase();
 }
 
-/** Build a lookup map from table id → table name (lowercased) */
+/**
+ * Table identity: `schema.name` when the table has a schema, otherwise the
+ * bare name — so tables without a namespace keep their plain name.
+ */
+function qualifiedName(table: DBTable): string {
+  return table.schema ? `${table.schema}.${table.name}` : table.name;
+}
+
+/** Build a lookup map from table id → qualified table name */
 function tableIdToName(tables: DBTable[]): Map<string, string> {
   const map = new Map<string, string>();
   for (const t of tables) {
-    map.set(t.id, t.name);
+    map.set(t.id, qualifiedName(t));
   }
   return map;
 }
@@ -208,7 +216,7 @@ function diffTables(before: DBTable, after: DBTable): TableDiff | null {
   if (!hasChanges) return null;
 
   return {
-    tableName: after.name,
+    tableName: qualifiedName(after),
     addedFields,
     removedFields,
     modifiedFields,
@@ -266,15 +274,15 @@ function generateSummary(diff: Omit<SchemaDiff, "summary">): string {
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 export function diffSchemas(before: Diagram, after: Diagram): SchemaDiff {
-  // Build table maps keyed by normalized name
+  // Build table maps keyed by normalized qualified name
   const beforeTableMap = new Map<string, DBTable>();
   for (const t of before.tables) {
-    beforeTableMap.set(normalize(t.name), t);
+    beforeTableMap.set(normalize(qualifiedName(t)), t);
   }
 
   const afterTableMap = new Map<string, DBTable>();
   for (const t of after.tables) {
-    afterTableMap.set(normalize(t.name), t);
+    afterTableMap.set(normalize(qualifiedName(t)), t);
   }
 
   // Added / removed / modified tables
@@ -285,7 +293,7 @@ export function diffSchemas(before: Diagram, after: Diagram): SchemaDiff {
   for (const [key, beforeTable] of beforeTableMap) {
     const afterTable = afterTableMap.get(key);
     if (!afterTable) {
-      removedTables.push(beforeTable.name);
+      removedTables.push(qualifiedName(beforeTable));
     } else {
       const tableDiff = diffTables(beforeTable, afterTable);
       if (tableDiff) modifiedTables.push(tableDiff);
@@ -294,7 +302,7 @@ export function diffSchemas(before: Diagram, after: Diagram): SchemaDiff {
 
   for (const [key, afterTable] of afterTableMap) {
     if (!beforeTableMap.has(key)) {
-      addedTables.push(afterTable.name);
+      addedTables.push(qualifiedName(afterTable));
     }
   }
 

@@ -1,3 +1,92 @@
+## [2.1.6](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.5...v2.1.6) (2026-10-17)
+
+
+### Bug Fixes
+
+* keep the AI settings footer in place while the model list loads ([49854d2](https://github.com/maxgfr/db-schema-viewer/commit/49854d28c6970067e7f7c0809c48102ebb03ef1d)), closes [#17](https://github.com/maxgfr/db-schema-viewer/issues/17)
+
+## [2.1.5](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.4...v2.1.5) (2026-10-17)
+
+
+### Bug Fixes
+
+* add sticky notes where the canvas is visible ([b020b96](https://github.com/maxgfr/db-schema-viewer/commit/b020b963d78da65290c1140583787566dc3ebdc6)), closes [#21](https://github.com/maxgfr/db-schema-viewer/issues/21)
+
+## [2.1.4](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.3...v2.1.4) (2026-10-17)
+
+
+### Bug Fixes
+
+* **deps:** llm-models 1.10.0, so the model picker only lists chat models ([00ef059](https://github.com/maxgfr/db-schema-viewer/commit/00ef0595f76ce6aed427b0783cb2458a53d9ca95)), closes [#19](https://github.com/maxgfr/db-schema-viewer/issues/19)
+
+## [2.1.3](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.2...v2.1.3) (2026-10-17)
+
+
+### Bug Fixes
+
+* give the diff AI each change with its values, and translate the diff summary ([f22afc0](https://github.com/maxgfr/db-schema-viewer/commit/f22afc090f9643d4569a07e398495685a02845e5)), closes [#15](https://github.com/maxgfr/db-schema-viewer/issues/15)
+
+## [2.1.2](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.1...v2.1.2) (2026-10-17)
+
+
+### Bug Fixes
+
+* bin chart dates in UTC so first-of-month dates stay in their month ([c75d424](https://github.com/maxgfr/db-schema-viewer/commit/c75d4248687ba09ee51f99a7099eaf6a9e9a1e7f)), closes [#13](https://github.com/maxgfr/db-schema-viewer/issues/13)
+
+## [2.1.1](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.0...v2.1.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* **toolkit:** send the rows to the data chat instead of letting the model guess them ([11af991](https://github.com/maxgfr/db-schema-viewer/commit/11af991d0257f1e69293c7a1acb83de6bbc4e154)), closes [#11](https://github.com/maxgfr/db-schema-viewer/issues/11)
+
+# [2.1.0](https://github.com/maxgfr/db-schema-viewer/compare/v2.0.0...v2.1.0) (2026-10-16)
+
+
+### Features
+
+* live model catalog, key encrypted for the tab, settings shared with csv-ai-analyzer ([38e51e0](https://github.com/maxgfr/db-schema-viewer/commit/38e51e0bf0bf39fd7d4798f0d919bc219fecdc6a)), closes [#9](https://github.com/maxgfr/db-schema-viewer/issues/9)
+* **toolkit:** read the response language as a code or a name ([6d6c1b3](https://github.com/maxgfr/db-schema-viewer/commit/6d6c1b3eb22a5f9da0eb66fedfcc56bde6bbba1c)), closes [#9](https://github.com/maxgfr/db-schema-viewer/issues/9)
+
+# [2.0.0](https://github.com/maxgfr/db-schema-viewer/compare/v1.3.1...v2.0.0) (2026-10-16)
+
+
+* feat(toolkit)!: create models through llm-connect, on ai v6 ([9d8c18b](https://github.com/maxgfr/db-schema-viewer/commit/9d8c18b46bea4090a6866beb0587c0bec4268661)), closes [#7](https://github.com/maxgfr/db-schema-viewer/issues/7)
+
+
+### BREAKING CHANGES
+
+* the ai peer dependency moves from ^5 to ^6 and the
+@ai-sdk/* peers from ^2 to ^3 (@ai-sdk/openai-compatible ^2 is a new
+optional peer). AISettings.providerId is optional.
+
+## [1.3.1](https://github.com/maxgfr/db-schema-viewer/compare/v1.3.0...v1.3.1) (2026-10-12)
+
+
+### Bug Fixes
+
+* **toolkit:** read TypeORM join tables, column name options and merged FK columns ([9cd1d60](https://github.com/maxgfr/db-schema-viewer/commit/9cd1d60d5f990d33411586c063e951ab07c0a066))
+* **toolkit:** use SQL column names from Drizzle schemas ([916d2d6](https://github.com/maxgfr/db-schema-viewer/commit/916d2d6c946833235e421818eec02d5580da7fd1))
+* **web:** keep each Web Worker on its own script behind the service worker ([4ad58b2](https://github.com/maxgfr/db-schema-viewer/commit/4ad58b2b25778bcb299278542f6ad7bb61b440f7))
+
+# [1.3.0](https://github.com/maxgfr/db-schema-viewer/compare/v1.2.0...v1.3.0) (2026-10-12)
+
+
+### Bug Fixes
+
+* **toolkit:** correct exporters, schema analyzer and CLI flags ([507daf3](https://github.com/maxgfr/db-schema-viewer/commit/507daf3f5bce8f53321fdcaa672bf497d0e97fc0))
+* **toolkit:** harden schema parsers and resolve schema-qualified tables ([6d6101f](https://github.com/maxgfr/db-schema-viewer/commit/6d6101fd5ef94ace717a7776a56be5c17ea94eaf))
+* **toolkit:** realistic fake data and non-overlapping shuffle layout ([09e4b4b](https://github.com/maxgfr/db-schema-viewer/commit/09e4b4b1f9134e7bd02f640e312330e0aa3e4b29))
+* **web:** encrypt the AI key at rest and enforce a CSP on GitHub Pages ([232394a](https://github.com/maxgfr/db-schema-viewer/commit/232394a9343a4e6b8de28028aabd4bab45fb4b46))
+* **web:** keep tables on Backspace and export images with orphan relationships ([73d8feb](https://github.com/maxgfr/db-schema-viewer/commit/73d8febfbab3cc63f58d385736912ab5ba3458d8))
+* **web:** keyboard, screen reader and IME fixes across dialogs and panels ([a432366](https://github.com/maxgfr/db-schema-viewer/commit/a43236679214106dbf24123e97ede92de7eb568e))
+* **web:** never overwrite a local project when opening a link or file ([9bd4a05](https://github.com/maxgfr/db-schema-viewer/commit/9bd4a05304376c15bb20324b7c5bec0819dd269d))
+
+
+### Features
+
+* **web:** generate a slim model catalog with llm-models ([2da1f48](https://github.com/maxgfr/db-schema-viewer/commit/2da1f481eba960fb2d12aa3de62cd342a7f9c486))
+
 # [1.2.0](https://github.com/maxgfr/db-schema-viewer/compare/v1.1.13...v1.2.0) (2026-09-08)
 
 

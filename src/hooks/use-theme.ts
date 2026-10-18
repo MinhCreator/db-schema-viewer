@@ -51,14 +51,14 @@ export function useTheme() {
     return () => mql.removeEventListener("change", handler);
   }, [mode]);
 
+  // Updaters must stay pure (React may call them twice), so the next mode is
+  // computed from the current value and the side effects run once, here.
   const toggleTheme = useCallback(() => {
-    setModeState((prev) => {
-      const next: ThemeMode = prev === "light" ? "dark" : prev === "dark" ? "system" : "light";
-      try { localStorage.setItem(STORAGE_KEY, next); } catch {}
-      setThemeState(resolveTheme(next));
-      return next;
-    });
-  }, []);
+    const next: ThemeMode = mode === "light" ? "dark" : mode === "dark" ? "system" : "light";
+    setModeState(next);
+    setThemeState(resolveTheme(next));
+    try { localStorage.setItem(STORAGE_KEY, next); } catch {}
+  }, [mode]);
 
   const setTheme = useCallback((t: Theme) => {
     setModeState(t);

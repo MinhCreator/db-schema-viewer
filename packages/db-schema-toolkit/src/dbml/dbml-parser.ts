@@ -12,11 +12,14 @@ interface DBMLColumn {
   increment: boolean;
   default?: string;
   note?: string;
-  ref?: {
-    type: ">" | "<" | "-" | "<>";
-    table: string;
-    column: string;
-  };
+  ref?: InlineRef;
+}
+
+interface InlineRef {
+  type: ">" | "<" | "-" | "<>";
+  schema?: string;
+  table: string;
+  column: string;
 }
 
 interface DBMLTable {
@@ -27,12 +30,28 @@ interface DBMLTable {
 }
 
 interface DBMLRef {
+  sourceSchema?: string;
   sourceTable: string;
   sourceColumn: string;
+  targetSchema?: string;
   targetTable: string;
   targetColumn: string;
   type: ">" | "<" | "-" | "<>";
 }
+
+/** `[schema.]table.column` endpoint of a ref. */
+interface RefEndpoint {
+  schema?: string;
+  table: string;
+  column: string;
+}
+
+type TableResolver = (name: string, schema?: string) => string;
+
+/** Ref operator: captures `>`, `<`, `-` or `<>`. */
+const REF_OP = String.raw`([><\-]|<>)`;
+/** `[schema.]table.column`: captures schema (optional), table, column. */
+const REF_ENDPOINT = String.raw`(?:(\w+)\.)?(\w+)\.(\w+)`;
 
 /**
  * Parse a DBML (Database Markup Language) schema into a Diagram.
@@ -46,18 +65,25 @@ export function parseDBMLSchema(content: string, name?: string): Diagram {
 
   // Build alias → real name lookup
   const aliasMap = new Map<string, string>();
+  const nameCounts = new Map<string, number>();
   for (const t of tables) {
     if (t.alias) aliasMap.set(t.alias.toLowerCase(), t.name);
+    const key = t.name.toLowerCase();
+    nameCounts.set(key, (nameCounts.get(key) ?? 0) + 1);
   }
 
-  const resolveTable = (ref: string): string =>
-    aliasMap.get(ref.toLowerCase()) || ref;
+  // Refs may be schema-qualified. Keep the schema only when the bare table
+  // name is declared in several schemas; otherwise the bare name resolves.
+  const resolveTable: TableResolver = (ref, schema) => {
+    if (!schema) return aliasMap.get(ref.toLowerCase()) || ref;
+    return (nameCounts.get(ref.toLowerCase()) ?? 0) > 1 ? `${schema}.${ref}` : ref;
+  };
 
   // Convert to shared types
   const parsedTables = tables.map((dt) => ({
     name: dt.name,
     schema: dt.schema,
-    columns: dbmlColumnsToShared(dt.columns),
+    columns: dbmlColumnsToShared(dt.columns, resolveTable),
     indexes: [] as { name: string; columns: string[]; unique: boolean }[],
     isView: false,
   }));
@@ -71,9 +97,48 @@ export function parseDBMLSchema(content: string, name?: string): Diagram {
 
 // ── Comment stripping ──────────────────────────────────────────────
 
+/**
+ * Remove line and block comments outside of string literals (single, double,
+ * backtick and triple-quoted). Newlines inside block comments are kept so
+ * line-based column parsing is unaffected.
+ */
 function stripComments(content: string): string {
-  let result = content.replace(/\/\*[\s\S]*?\*\//g, "");
-  result = result.replace(/\/\/.*$/gm, "");
+  let result = "";
+  let i = 0;
+
+  while (i < content.length) {
+    const ch = content[i]!;
+
+    if (ch === "'" || ch === '"' || ch === "`") {
+      const quote = content.startsWith("'''", i) ? "'''" : ch;
+      let end = i + quote.length;
+      while (end < content.length && !content.startsWith(quote, end)) {
+        end += content[end] === "\\" ? 2 : 1;
+      }
+      end = Math.min(content.length, end + quote.length);
+      result += content.slice(i, end);
+      i = end;
+      continue;
+    }
+
+    if (content.startsWith("//", i)) {
+      const newline = content.indexOf("\n", i);
+      i = newline === -1 ? content.length : newline;
+      continue;
+    }
+
+    if (content.startsWith("/*", i)) {
+      const close = content.indexOf("*/", i + 2);
+      const end = close === -1 ? content.length : close + 2;
+      result += content.slice(i, end).replace(/[^\n]/g, "");
+      i = end;
+      continue;
+    }
+
+    result += ch;
+    i++;
+  }
+
   return result;
 }
 
@@ -83,7 +148,7 @@ function extractTables(content: string): DBMLTable[] {
   const tables: DBMLTable[] = [];
 
   const tableRegex =
-    /Table\s+((?:(\w+)\.)?(\w+))(?:\s+as\s+(\w+))?\s*\{/gi;
+    /Table\s+((?:(\w+)\.)?(\w+))(?:\s+as\s+(\w+))?(?:\s*\[[^\]]*\])?\s*\{/gi;
 
   let match;
   while ((match = tableRegex.exec(content)) !== null) {
@@ -169,7 +234,7 @@ interface ParsedAttributes {
   notNull: boolean;
   default?: string;
   note?: string;
-  ref?: { type: ">" | "<" | "-" | "<>"; table: string; column: string };
+  ref?: InlineRef;
 }
 
 function parseAttributes(attrsStr: string): ParsedAttributes {
@@ -219,13 +284,14 @@ function parseAttributes(attrsStr: string): ParsedAttributes {
   if (noteMatch) result.note = noteMatch[1];
 
   const refMatch = attrsStr.match(
-    /\bref\s*:\s*([><\-]|<>)\s*(\w+)\.(\w+)/i,
+    new RegExp(String.raw`\bref\s*:\s*${REF_OP}\s*${REF_ENDPOINT}`, "i"),
   );
   if (refMatch) {
     result.ref = {
-      type: refMatch[1] as ">" | "<" | "-" | "<>",
-      table: refMatch[2]!,
-      column: refMatch[3]!,
+      type: refMatch[1] as InlineRef["type"],
+      schema: refMatch[2] || undefined,
+      table: refMatch[3]!,
+      column: refMatch[4]!,
     };
   }
 
@@ -237,21 +303,23 @@ function parseAttributes(attrsStr: string): ParsedAttributes {
 function extractStandaloneRefs(content: string): DBMLRef[] {
   const refs: DBMLRef[] = [];
 
+  const refPair = String.raw`${REF_ENDPOINT}\s*${REF_OP}\s*${REF_ENDPOINT}`;
+  const toRef = (m: RegExpExecArray): DBMLRef =>
+    normalizeRef(
+      { schema: m[1] || undefined, table: m[2]!, column: m[3]! },
+      m[4] as DBMLRef["type"],
+      { schema: m[5] || undefined, table: m[6]!, column: m[7]! },
+    );
+
   // Ref: / Ref name:
-  const refLineRegex =
-    /Ref(?:\s+\w+)?\s*:\s*(\w+)\.(\w+)\s*([><\-]|<>)\s*(\w+)\.(\w+)/gi;
+  const refLineRegex = new RegExp(
+    String.raw`Ref(?:\s+\w+)?\s*:\s*${refPair}`,
+    "gi",
+  );
 
   let match;
   while ((match = refLineRegex.exec(content)) !== null) {
-    refs.push(
-      normalizeRef(
-        match[1]!,
-        match[2]!,
-        match[3] as DBMLRef["type"],
-        match[4]!,
-        match[5]!,
-      ),
-    );
+    refs.push(toRef(match));
   }
 
   // Ref blocks: Ref name { ... }
@@ -259,19 +327,10 @@ function extractStandaloneRefs(content: string): DBMLRef[] {
   let blockMatch;
   while ((blockMatch = refBlockRegex.exec(content)) !== null) {
     const body = blockMatch[1]!;
-    const innerRefRegex =
-      /(\w+)\.(\w+)\s*([><\-]|<>)\s*(\w+)\.(\w+)/g;
+    const innerRefRegex = new RegExp(refPair, "g");
     let innerMatch;
     while ((innerMatch = innerRefRegex.exec(body)) !== null) {
-      refs.push(
-        normalizeRef(
-          innerMatch[1]!,
-          innerMatch[2]!,
-          innerMatch[3] as DBMLRef["type"],
-          innerMatch[4]!,
-          innerMatch[5]!,
-        ),
-      );
+      refs.push(toRef(innerMatch));
     }
   }
 
@@ -280,34 +339,29 @@ function extractStandaloneRefs(content: string): DBMLRef[] {
 
 /** Normalize a ref so source is always the FK side. */
 function normalizeRef(
-  table1: string,
-  col1: string,
+  left: RefEndpoint,
   type: DBMLRef["type"],
-  table2: string,
-  col2: string,
+  right: RefEndpoint,
 ): DBMLRef {
-  if (type === "<") {
-    // Reverse: table2 is the FK side
-    return {
-      sourceTable: table2,
-      sourceColumn: col2,
-      targetTable: table1,
-      targetColumn: col1,
-      type: "<",
-    };
-  }
+  // `<` means the right side is the FK side
+  const [source, target] = type === "<" ? [right, left] : [left, right];
   return {
-    sourceTable: table1,
-    sourceColumn: col1,
-    targetTable: table2,
-    targetColumn: col2,
+    sourceSchema: source.schema,
+    sourceTable: source.table,
+    sourceColumn: source.column,
+    targetSchema: target.schema,
+    targetTable: target.table,
+    targetColumn: target.column,
     type,
   };
 }
 
 // ── Ref merging / deduplication ────────────────────────────────────
 
-function dbmlColumnsToShared(columns: DBMLColumn[]): ParsedColumn[] {
+function dbmlColumnsToShared(
+  columns: DBMLColumn[],
+  resolveTable: TableResolver,
+): ParsedColumn[] {
   return columns.map((col) => ({
     name: col.name,
     type: col.type,
@@ -318,7 +372,10 @@ function dbmlColumnsToShared(columns: DBMLColumn[]): ParsedColumn[] {
     comment: col.note,
     // Inline refs are handled via collectAllRefs, not on ParsedColumn
     references: col.ref
-      ? { table: col.ref.table, column: col.ref.column }
+      ? {
+          table: resolveTable(col.ref.table, col.ref.schema),
+          column: col.ref.column,
+        }
       : undefined,
   }));
 }
@@ -332,11 +389,13 @@ function collectAllRefs(tables: DBMLTable[], standaloneRefs: DBMLRef[]): DBMLRef
 
       allRefs.push(
         normalizeRef(
-          dt.name,
-          col.name,
+          { schema: dt.schema, table: dt.name, column: col.name },
           col.ref.type,
-          col.ref.table,
-          col.ref.column,
+          {
+            schema: col.ref.schema,
+            table: col.ref.table,
+            column: col.ref.column,
+          },
         ),
       );
     }
@@ -359,14 +418,14 @@ function refTypeToCardinality(type: DBMLRef["type"]): Cardinality {
 
 function deduplicateRefs(
   allRefs: DBMLRef[],
-  resolveTable: (name: string) => string,
+  resolveTable: TableResolver,
 ): ParsedRelationship[] {
   const relationships: ParsedRelationship[] = [];
   const seen = new Set<string>();
 
   for (const ref of allRefs) {
-    const src = resolveTable(ref.sourceTable);
-    const tgt = resolveTable(ref.targetTable);
+    const src = resolveTable(ref.sourceTable, ref.sourceSchema);
+    const tgt = resolveTable(ref.targetTable, ref.targetSchema);
     const key = `${src.toLowerCase()}.${ref.sourceColumn.toLowerCase()}-${tgt.toLowerCase()}.${ref.targetColumn.toLowerCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);

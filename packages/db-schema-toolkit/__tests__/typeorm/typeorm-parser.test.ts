@@ -378,4 +378,163 @@ describe("parseTypeORMSchema", () => {
     expect(post.fields.find((f) => f.name === "title")).toBeDefined();
     expect(post.fields.find((f) => f.name === "createdAt")).toBeDefined();
   });
+
+  it("keeps entities with other decorators between @Entity and class", () => {
+    const content = `
+      @Entity("users")
+      @Index(["email"], { unique: true })
+      export class User {
+        @PrimaryGeneratedColumn()
+        id: number;
+
+        @Column()
+        email: string;
+      }
+
+      @Entity()
+      @Unique(["slug"])
+      export default class Post {
+        @PrimaryGeneratedColumn()
+        id: number;
+
+        @Column()
+        slug: string;
+      }
+    `;
+    const diagram = parseTypeORMSchema(content);
+
+    expect(diagram.tables.map((t) => t.name).sort()).toEqual(["Post", "users"]);
+    const users = diagram.tables.find((t) => t.name === "users")!;
+    expect(users.indexes).toEqual([
+      expect.objectContaining({ columns: ["email"], unique: true }),
+    ]);
+  });
+
+  it("parses properties declared without semicolons", () => {
+    const content = `
+      @Entity()
+      export class Account {
+        @PrimaryGeneratedColumn()
+        id: number
+
+        @Column({ nullable: true })
+        nickname: string
+
+        @Column()
+        active: boolean
+      }
+    `;
+    const diagram = parseTypeORMSchema(content);
+    const account = diagram.tables[0]!;
+
+    expect(account.fields.map((f) => f.name)).toEqual(["id", "nickname", "active"]);
+    expect(account.fields.find((f) => f.name === "nickname")!.nullable).toBe(true);
+    expect(account.fields.find((f) => f.name === "active")!.type).toBe("BOOLEAN");
+  });
+
+  it("reads the name option of date and primary key columns", () => {
+    const diagram = parseTypeORMSchema(`
+      @Entity("posts")
+      export class Post {
+        @PrimaryGeneratedColumn({ name: "post_id" })
+        id: number;
+
+        @CreateDateColumn({ name: "created_at" })
+        createdAt: Date;
+
+        @UpdateDateColumn({ name: "updated_at", type: "timestamptz" })
+        updatedAt: Date;
+
+        @DeleteDateColumn({ name: "deleted_at" })
+        deletedAt?: Date;
+      }
+    `);
+    expect(diagram.tables[0]!.fields.map((f) => f.name)).toEqual(["post_id", "created_at", "updated_at", "deleted_at"]);
+  });
+
+  it("merges a @ManyToOne join column with the @Column of the same name", () => {
+    const diagram = parseTypeORMSchema(`
+      @Entity("users")
+      export class User {
+        @PrimaryGeneratedColumn()
+        id: number;
+      }
+
+      @Entity("posts")
+      export class Post {
+        @PrimaryGeneratedColumn()
+        id: number;
+
+        @ManyToOne(() => User, (user) => user.posts, { onDelete: "CASCADE" })
+        @JoinColumn({ name: "author_id" })
+        author: User;
+
+        @Column({ name: "author_id", nullable: true })
+        authorId: number;
+      }
+    `);
+    const posts = diagram.tables.find((t) => t.name === "posts")!;
+    expect(posts.fields.map((f) => f.name)).toEqual(["id", "author_id"]);
+    const authorId = posts.fields.find((f) => f.name === "author_id")!;
+    expect(authorId.isForeignKey).toBe(true);
+    expect(authorId.nullable).toBe(true);
+    expect(diagram.relationships).toHaveLength(1);
+  });
+
+  it("creates the join table of a @ManyToMany owner side", () => {
+    const diagram = parseTypeORMSchema(`
+      @Entity("posts")
+      export class Post {
+        @PrimaryGeneratedColumn()
+        id: number;
+
+        @ManyToMany(() => Hashtag, (hashtag) => hashtag.posts)
+        @JoinTable({
+          name: "post_hashtags",
+          joinColumn: { name: "post_id", referencedColumnName: "id" },
+          inverseJoinColumn: { name: "hashtag_id", referencedColumnName: "id" },
+        })
+        hashtags: Hashtag[];
+      }
+
+      @Entity("hashtags")
+      export class Hashtag {
+        @PrimaryGeneratedColumn()
+        id: number;
+
+        @ManyToMany(() => Post, (post) => post.hashtags)
+        posts: Post[];
+      }
+    `);
+    const join = diagram.tables.find((t) => t.name === "post_hashtags");
+    expect(join?.fields.map((f) => f.name)).toEqual(["post_id", "hashtag_id"]);
+    expect(join?.fields.every((f) => f.primaryKey && f.isForeignKey)).toBe(true);
+    const targets = diagram.relationships
+      .filter((r) => r.sourceTableId === join!.id)
+      .map((r) => diagram.tables.find((t) => t.id === r.targetTableId)!.name)
+      .sort();
+    expect(targets).toEqual(["hashtags", "posts"]);
+  });
+
+  it("names a @JoinTable without options with TypeORM's defaults", () => {
+    const diagram = parseTypeORMSchema(`
+      @Entity("questions")
+      export class Question {
+        @PrimaryGeneratedColumn()
+        id: number;
+
+        @ManyToMany(() => Category)
+        @JoinTable()
+        categories: Category[];
+      }
+
+      @Entity("categories")
+      export class Category {
+        @PrimaryGeneratedColumn()
+        id: number;
+      }
+    `);
+    const join = diagram.tables.find((t) => t.name === "questions_categories_categories");
+    expect(join?.fields.map((f) => f.name)).toEqual(["questionsId", "categoriesId"]);
+  });
 });

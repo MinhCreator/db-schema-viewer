@@ -94,9 +94,10 @@ function extractEntities(content: string): MikroORMEntity[] {
   // Extract all class bodies for inheritance resolution (AST-based when available)
   const classBodies = resolveClassInheritance(content);
 
-  // Match @Entity() or @Entity({ tableName: '...' }) followed by class Name
+  // Match @Entity() or @Entity({ tableName: '...' }), optional extra class
+  // decorators, then `[export [default]] class Name`
   const entityRegex =
-    /@Entity\s*\(\s*(\{[^}]*\})?\s*\)\s*(?:export\s+)?class\s+(\w+)(?:\s+extends\s+(\w+))?/g;
+    /@Entity\s*\(\s*(\{[^}]*\})?\s*\)\s*(?:@\w+(?:\s*\([^()]*(?:\([^()]*\)[^()]*)*\))?\s*)*(?:export\s+)?(?:default\s+)?class\s+(\w+)(?:\s+extends\s+(\w+))?/g;
 
   let match;
   while ((match = entityRegex.exec(content)) !== null) {
@@ -153,9 +154,10 @@ function parseEntityColumns(
   const columns: (ParsedColumn & { cardinality?: Cardinality })[] = [];
 
   // Match one or more decorators followed by a field declaration
-  // Decorator: @Word(...) possibly with nested parens
+  // Decorator: @Word(...) possibly with nested parens. The type ends at `;` or
+  // at the end of the line, so semicolon-free code is accepted.
   const propertyRegex =
-    /((?:@\w+(?:\s*\([^)]*(?:\([^)]*\)[^)]*)*\))\s*)+)\s*(\w+)\s*(?:[!?])?\s*:\s*([^;]+);/g;
+    /((?:@\w+(?:\s*\([^()]*(?:\([^()]*\)[^()]*)*\))\s*)+)\s*(\w+)\s*(?:[!?])?\s*:\s*([^;\n]+);?/g;
 
   let match;
   while ((match = propertyRegex.exec(body)) !== null) {

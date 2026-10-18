@@ -193,3 +193,34 @@ const User = sequelize.define('User', {
     expect(result).toContain("id: { type: DataTypes.UUID }");
   });
 });
+
+describe("inline-helpers regressions", () => {
+  it("keeps `$` sequences literally when inlining an object spread", () => {
+    const content = `
+const baseColumns = {
+  price: { type: DataTypes.STRING, defaultValue: "$&-$1-$$" },
+};
+
+const Product = sequelize.define('Product', {
+  ...baseColumns,
+});
+    `;
+    const result = inlineObjectSpreads(content);
+    expect(result).toContain(`defaultValue: "$&-$1-$$"`);
+    expect(result).not.toContain("...baseColumns");
+  });
+
+  it("keeps scanning declarators after a parameterless function in the same const", () => {
+    const content = `
+const now = () => new Date(), sharedCols = (d) => ({
+  id: d.varchar({ length: 255 }).notNull().primaryKey(),
+});
+
+export const files = createTable("file", (d) => sharedCols(d));
+    `;
+    const result = inlineHelperFunctions(content);
+    expect(result).toContain("(d) => ({");
+    expect(result).toContain("id: d.varchar");
+    expect(result).not.toMatch(/=>\s*sharedCols\s*\(/);
+  });
+});

@@ -78,7 +78,9 @@ function die(message: string): never {
 function readSchemaFile(filePath: string, stdinFileName?: string): { content: string; fileName: string } {
   if (filePath === "-") {
     const content = readFileSync(0, "utf-8");
-    return { content, fileName: stdinFileName || "stdin.sql" };
+    // Without a --filename hint, an extension-less name lets the parser detect
+    // the format from the content.
+    return { content, fileName: stdinFileName || "stdin" };
   }
   const resolved = resolve(filePath);
   if (!existsSync(resolved)) {
@@ -107,6 +109,9 @@ function output(content: string, outputPath?: string) {
   }
 }
 
+/** Flags that never take a value, so they must not consume the next argument. */
+const BOOLEAN_FLAGS = new Set(["json", "no-color", "llm", "help", "version"]);
+
 function parseArgs(args: string[]): { positional: string[]; flags: Record<string, string | true> } {
   const positional: string[] = [];
   const flags: Record<string, string | true> = {};
@@ -116,7 +121,10 @@ function parseArgs(args: string[]): { positional: string[]; flags: Record<string
     if (arg.startsWith("--")) {
       const key = arg.slice(2);
       const next = args[i + 1];
-      if (next && !next.startsWith("-")) {
+      if (BOOLEAN_FLAGS.has(key)) {
+        flags[key] = true;
+        i += 1;
+      } else if (next && !next.startsWith("-")) {
         flags[key] = next;
         i += 2;
       } else {
@@ -391,11 +399,18 @@ function cmdAnalyze(args: string[]) {
   const filePath = positional[0];
   if (!filePath) die("Missing input file. Usage: db-schema-toolkit analyze <file>");
 
+  const failUnder = flags["fail-under"];
+  let threshold: number | undefined;
+  if (failUnder !== undefined) {
+    threshold = typeof failUnder === "string" ? Number(failUnder) : Number.NaN;
+    if (!Number.isFinite(threshold)) {
+      die(`--fail-under expects a number, got "${failUnder === true ? "" : failUnder}"`);
+    }
+  }
+
   const diagram = parseDiagram(filePath, getStdinFileName(flags));
   const analysis = analyzeSchema(diagram);
   const asJson = flags["json"] === true;
-  const failUnder = flags["fail-under"];
-  const threshold = typeof failUnder === "string" ? Number(failUnder) : undefined;
 
   if (asJson) {
     output(JSON.stringify(analysis, null, 2) + "\n", (flags["output"] || flags["o"]) as string | undefined);
@@ -575,7 +590,9 @@ function cmdGenerate(args: string[]) {
 
   const diagram = parseDiagram(filePath, getStdinFileName(flags));
   const rows = Number(flags["rows"] || flags["r"]) || 30;
-  const seed = Number(flags["seed"] || flags["s"]) || 42;
+  const seedFlag = flags["seed"] ?? flags["s"];
+  const seedValue = typeof seedFlag === "string" ? Number(seedFlag) : Number.NaN;
+  const seed = Number.isFinite(seedValue) ? seedValue : 42;
 
   const data = generateFakeData(diagram.tables, diagram.relationships, { rowCount: rows, seed });
   output(

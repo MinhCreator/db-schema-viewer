@@ -111,6 +111,28 @@ test("text exports and image exports work with filtered tables", async ({ page }
   await expect(page.locator(".react-flow__node-table")).toHaveCount(1);
 });
 
+test("image export does not wait for a relationship to a missing field", async ({ page }) => {
+  await start(page);
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  await page.getByRole("button", { name: "Project file", exact: true }).click();
+  const downloaded = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download project", exact: true }).click();
+  const project = JSON.parse(await readFile((await (await downloaded).path())!, "utf8"));
+  const [relationship] = project.diagram.relationships;
+  project.diagram.relationships.push({ ...relationship, id: "orphan", targetFieldId: "missing-field" });
+  await page.keyboard.press("Escape");
+  page.on("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Back to home", exact: true }).click();
+  await upload(page, JSON.stringify(project), "orphan.dbschema.json");
+  await expect(page.locator(".react-flow__node-table")).toHaveCount(3);
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  await page.getByRole("button", { name: "Image", exact: true }).click();
+  await page.getByRole("button", { name: "PNG", exact: true }).click();
+  const pngDownload = page.waitForEvent("download", { timeout: 4000 });
+  await page.getByRole("button", { name: "Export PNG", exact: true }).click();
+  expect((await readFile((await (await pngDownload).path())!)).subarray(1, 4).toString()).toBe("PNG");
+});
+
 test("malformed link stays usable and offline reload restores the project", async ({ page, context, browserName, baseURL }) => {
   await page.goto("./#d=%ZZ");
   await expect(page.getByRole("button", { name: "Import Schema", exact: true })).toBeVisible();
@@ -126,4 +148,19 @@ test("malformed link stays usable and offline reload restores the project", asyn
   await page.reload();
   await expect(page.locator(".react-flow__node-table")).toHaveCount(3);
   await context.setOffline(false);
+});
+
+test("data worker keeps working once the service worker controls the page", async ({ page }) => {
+  await page.goto("./");
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
+  // The schema worker loads first, then the data worker reuses the same loader script.
+  await upload(page, "CREATE TABLE metrics (value INT, name TEXT);");
+  await expect(page.locator(".react-flow__node-table")).toHaveCount(1);
+  await page.getByRole("button", { name: "Data Explorer", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Data Explorer" })).toBeVisible();
+  const dump = "INSERT INTO metrics (value,name) VALUES " + Array.from({ length: 30 }, (_, i) => `(${i},'row_${i}')`).join(",") + ";";
+  await page.locator('input[type="file"]').setInputFiles({ name: "dump.sql", mimeType: "text/plain", buffer: Buffer.from(dump) });
+  await expect(page.getByText("30 rows", { exact: true })).toBeVisible();
 });

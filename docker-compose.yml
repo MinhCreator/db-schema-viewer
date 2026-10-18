@@ -11,7 +11,9 @@ services:
     restart: unless-stopped
 
   # Ollama — local LLM server (optional, uncomment to enable AI features)
-  # No external API needed: configure the app to point to http://ollama:11434/v1
+  # No external API needed. AI calls run in the browser, so point the app to
+  # http://localhost:11434/v1 (the port published below) and start Ollama with
+  # OLLAMA_ORIGINS set to the app's origin.
   #
   # ollama:
   #   image: ollama/ollama:latest
@@ -19,6 +21,8 @@ services:
   #     - "11434:11434"
   #   volumes:
   #     - ollama_data:/root/.ollama
+  #   environment:
+  #     - OLLAMA_ORIGINS=http://localhost:3000
   #   restart: unless-stopped
   #   # GPU support (NVIDIA):
   #   # deploy:

@@ -7,6 +7,8 @@ Parse, analyze, export, and AI-review database schemas from code. Supports **SQL
 
 ## Install
 
+Requires Node.js 20 or later. The package is ESM-only.
+
 ### As a library
 
 ```bash
@@ -32,7 +34,15 @@ brew install maxgfr/tap/db-schema-toolkit
 
 ## CLI
 
-`db-schema-toolkit` ships a CLI that can parse, export, analyze, and diff schemas directly from the terminal.
+`db-schema-toolkit` ships a CLI that can parse, export, analyze, diff, summarize, generate fake data for, and share schemas directly from the terminal.
+
+Global options:
+
+| Flag | Description |
+|------|-------------|
+| `-` (as the file) | Read the schema from stdin, e.g. `cat schema.sql \| db-schema-toolkit parse -` |
+| `--filename <name>` | Hint the format when reading from stdin (e.g. `--filename schema.prisma`); without it, the format is detected from the content |
+| `--no-color` | Disable colored output (the `NO_COLOR` env var also works) |
 
 ### Commands
 
@@ -65,8 +75,10 @@ db-schema-toolkit export schema.prisma -f json | jq '.tables[].name'
 #### `analyze` — Schema quality analysis
 
 ```bash
-db-schema-toolkit analyze <file> [--json] [--output <file>]
+db-schema-toolkit analyze <file> [--json] [--output <file>] [--fail-under <score>]
 ```
+
+`--fail-under <score>` exits with code 1 when the overall quality score is below the threshold.
 
 Returns a quality score (0–100), metrics (table/field/relationship counts, relational density, FK depth), and anti-patterns (missing PKs, naming issues, orphan tables, etc.).
 
@@ -79,6 +91,9 @@ db-schema-toolkit analyze schema.sql --json
 
 # Get quality score as a number
 db-schema-toolkit analyze schema.sql --json | jq '.qualityScore.overall'
+
+# Fail a CI job if the score is below 70
+db-schema-toolkit analyze schema.sql --fail-under 70
 
 # Find critical issues
 db-schema-toolkit analyze schema.sql --json | jq '.antiPatterns[] | select(.severity == "critical")'
@@ -115,10 +130,30 @@ db-schema-toolkit parse schema.prisma | jq '.tables[].name'
 #### `info` — Quick schema summary
 
 ```bash
-db-schema-toolkit info <file>
+db-schema-toolkit info <file> [--json] [--output <file>]
 ```
 
-Prints a summary: table/view count, fields with types, PK/FK/unique constraints.
+Prints a summary: table/view count, fields with types, PK/FK/unique constraints. `--json` returns the same summary as an object (`name`, `databaseType`, `tables`, `views`, `fields`, `relationships`, `tableDetails`).
+
+```bash
+cat schema.prisma | db-schema-toolkit info - --filename schema.prisma --json
+```
+
+#### `generate` — Generate fake data
+
+```bash
+db-schema-toolkit generate <file> [--rows <n>] [--seed <n>] [--output <file>]
+```
+
+Outputs JSON rows for every table, respecting foreign keys. `--rows, -r` defaults to 30 and `--seed, -s` to 42, so the same seed gives the same data.
+
+#### `share` — Shareable URL
+
+```bash
+db-schema-toolkit share <file>
+```
+
+Prints a `https://maxgfr.github.io/db-schema-viewer/#d=...` URL that opens the schema in the web viewer. The schema is compressed into the URL fragment, never uploaded.
 
 #### `help` / `version`
 
@@ -133,13 +168,7 @@ db-schema-toolkit version       # Print version
 ```yaml
 # .github/workflows/schema-check.yml
 - name: Check schema quality
-  run: |
-    npx db-schema-toolkit analyze schema.sql --json > analysis.json
-    SCORE=$(jq '.qualityScore.overall' analysis.json)
-    if [ "$SCORE" -lt 70 ]; then
-      echo "Schema quality score $SCORE is below threshold (70)"
-      exit 1
-    fi
+  run: npx db-schema-toolkit analyze schema.sql --fail-under 70 --no-color
 
 - name: Schema diff on PR
   run: |
@@ -182,7 +211,7 @@ The built ESM entry points are tested directly under Node.js 24, without a bundl
 | `db-schema-toolkit` | Types, parsers, format detection, layout, sharing, utilities |
 | `db-schema-toolkit/export` | Code generation (SQL, Prisma, Drizzle, Markdown, Mermaid, DBML, PlantUML) |
 | `db-schema-toolkit/analysis` | Schema quality analysis, anti-pattern detection, schema diff |
-| `db-schema-toolkit/ai` | AI-powered schema review (requires `ai` + provider peer deps) |
+| `db-schema-toolkit/ai` | AI-powered schema review (requires `ai` v6 + provider peer deps) |
 | `db-schema-toolkit/data` | SQL dump parsing, column type inference, fake data generation |
 
 ## Parsing
@@ -271,11 +300,13 @@ console.log(diff.modifiedTables);
 
 ## AI (optional)
 
-Requires peer dependencies: `ai` + one of `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`, `@ai-sdk/mistral`.
+Requires peer dependencies: `ai` (v6) + the SDK of each provider you call: `@ai-sdk/openai` (v3, also used for custom OpenAI-compatible endpoints such as Ollama or LM Studio), `@ai-sdk/anthropic`, `@ai-sdk/google`, `@ai-sdk/mistral` (v3) or `@ai-sdk/openai-compatible` (v2, for providers such as DeepSeek or Z.ai).
 
 ```bash
 npm install ai @ai-sdk/openai
 ```
+
+Models are created by [llm-connect](https://github.com/maxgfr/llm-models/tree/main/packages/llm-connect): `AISettings` is its `LlmSettings`, whose `language` is a code (`"fr"`) or an English name (`"French"`). `providerNpm` picks the SDK, `providerApi` its base URL (an Anthropic-compatible provider keeps its own URL and key), and `customEndpoint` + `customModel` call an OpenAI-compatible server instead.
 
 ```ts
 import { challengeSchema, querySchema, type AISettings } from "db-schema-toolkit/ai";
@@ -301,7 +332,7 @@ await querySchema(settings, diagram, "What indexes should I add?",
 
 ### Cancelling AI work
 
-Pass an optional final `AbortSignal` to `querySchema`, `queryData`, `challengeSchema`, `suggestCharts` or `generateCustomChart`. For the streaming functions it follows the history argument. Cancellation rejects with `AbortError`; an aborted stream does not call its successful completion callback. The selected provider SDK loads on demand, so only that provider's SDK needs to be installed alongside `ai`.
+Pass an optional final `AbortSignal` to `querySchema`, `queryData`, `challengeSchema`, `suggestCharts` or `generateCustomChart`. For the streaming functions it follows the history argument. Cancellation rejects with `AbortError`; an aborted stream does not call its successful completion callback. The selected provider SDK loads on demand (through llm-connect's `loadModel`), so only that provider's SDK needs to be installed alongside `ai`.
 
 ```ts
 const controller = new AbortController();
@@ -381,9 +412,9 @@ import {
 | Prisma | `parsePrismaSchema` | `.prisma` |
 | DBML | `parseDBMLSchema` | `.dbml` |
 | TypeORM | `parseTypeORMSchema` | `.ts` with `@Entity` |
-| MikroORM | `parseMikroORMSchema` | `.ts` with `@mikro-orm` |
-| Sequelize | `parseSequelizeSchema` | `.ts`/`.js` with `sequelize.define` |
-| Kysely | `parseKyselySchema` | `.ts` with `kysely` |
+| MikroORM | `parseMikroORMSchema` | `.ts` with `@Entity` + `@Property`/`@PrimaryKey` |
+| Sequelize | `parseSequelizeSchema` | `.ts`/`.js` with `sequelize.define` or `Model.init` + `DataTypes` |
+| Kysely | `parseKyselySchema` | `.ts` with a `Database` interface/type and `Generated<` |
 
 ### Export (code generation)
 

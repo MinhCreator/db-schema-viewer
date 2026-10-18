@@ -13,7 +13,7 @@
 
 ## Philosophy
 
-- **Local parsing and visualization** — no application backend or account. AI features call the configured provider directly. API keys in cookies, diagrams in localStorage.
+- **Local parsing and visualization** — no application backend or account. AI features call the configured provider directly. API keys encrypted in IndexedDB, projects in localStorage.
 - **Simple UI** — upload a schema, see a diagram. Primary keys, foreign keys, relations (1:1, 1:N, N:M) visible at a glance.
 - **Schema analysis, not schema editing** — the tool is a *viewer* and *analyzer*, not a full database designer.
 - **Multi-format input** — SQL (9 dialects), Drizzle ORM, Prisma, TypeORM, Sequelize, MikroORM, Kysely, DBML.
@@ -76,7 +76,7 @@ Weighted pattern matching detects the database type from SQL syntax:
 - **Report export** — Download challenge results as JSON or Markdown
 - **Review by category** — Filter issues by severity (critical/warning/info) and category (naming, security, performance...)
 - **Multi-provider** — OpenAI, Anthropic, Google Gemini, Mistral, or any OpenAI-compatible endpoint
-- **Secure** — API keys stored in cookies (30d, secure outside localhost, sameSite strict), never sent to our servers
+- **Secure** — API keys never leave the browser except to the chosen provider. The key is never stored in clear text: it is encrypted with AES-GCM under a non-extractable browser key. With "Remember the key on this device", the ciphertext is kept in IndexedDB; unchecked (the default), in sessionStorage, so it survives a reload and is gone when the tab closes. A custom endpoint must use https, or plain http on this machine (Ollama, LM Studio). Other AI settings live in localStorage. A Content-Security-Policy restricts scripts, objects, base URIs and form targets
 
 ### Export
 
@@ -158,7 +158,7 @@ See [the verification report](docs/quality/validation.md) for coverage, reproduc
 | Sharing | lz-string |
 | Export | html-to-image + jsPDF |
 | Testing | Vitest + happy-dom + Playwright |
-| CI/CD | GitHub Actions → GitHub Pages |
+| CI/CD | GitHub Actions → GitHub Pages, npm, GHCR (Docker) |
 | Package Manager | pnpm 10 |
 
 ---
@@ -189,8 +189,12 @@ brew install maxgfr/tap/db-schema-toolkit
 | `diff <file1> <file2>` | Compare two schemas — added/removed/modified tables, fields, indexes |
 | `parse <file>` | Output full Diagram as JSON |
 | `info <file>` | Quick summary: tables, fields, types, constraints |
-| `generate <file>` | Generate fake data from a schema (`--rows <n>`, `--seed <n>`) |
+| `generate <file>` | Generate fake data from a schema as JSON (`--rows <n>`, `--seed <n>`) |
 | `share <file>` | Generate a shareable URL that opens in the web viewer |
+| `version` | Show version |
+| `help` / `help --llm` | Show help (the `--llm` variant is optimized for AI agents) |
+
+Common options: `--output, -o <path>` writes to a file; `--json` for `analyze`, `diff` and `info`; `--db-type, -d` picks the SQL dialect for `export -f sql`. Use `-` as the file to read from stdin, with `--filename <name>` to hint the format (e.g. `--filename schema.prisma`). `--no-color` (or the `NO_COLOR` env var) disables colors.
 
 ### Examples
 
@@ -204,8 +208,14 @@ db-schema-toolkit analyze schema.sql
 # Compare two versions
 db-schema-toolkit diff old.sql new.sql
 
+# Fail CI if the quality score drops below 70
+db-schema-toolkit analyze schema.sql --fail-under 70
+
 # Pipe JSON for scripting
 db-schema-toolkit parse schema.prisma | jq '.tables[].name'
+
+# Read from stdin
+cat schema.prisma | db-schema-toolkit info - --filename schema.prisma --json
 ```
 
 The library can also be used programmatically with 5 entry points (`db-schema-toolkit`, `db-schema-toolkit/export`, `db-schema-toolkit/analysis`, `db-schema-toolkit/ai`, `db-schema-toolkit/data`). See the [package README](packages/db-schema-toolkit/README.md) for full API documentation.
@@ -218,7 +228,7 @@ The library can also be used programmatically with 5 entry points (`db-schema-to
 git clone https://github.com/maxgfr/db-schema-viewer.git
 cd db-schema-viewer
 pnpm install
-pnpm dev        # http://localhost:3000
+pnpm dev        # http://localhost:3000 (rebuilds the toolkit on change)
 ```
 
 ```bash
@@ -264,53 +274,71 @@ pnpm build:export  # Static build for GitHub Pages
 
 ## Architecture
 
+The schema engine (parsers, exporters, analysis, AI prompts, dump and fake-data logic) lives in the `db-schema-toolkit` workspace package. The web app imports it and adds the UI, workers, storage and browser-only exports.
+
 ```
+packages/db-schema-toolkit/src/
+├── index.ts, export.ts, analysis.ts, ai.ts, data.ts  # Entry points
+├── cli.ts                      # db-schema-toolkit CLI
+├── domain/                     # Zod schemas (Diagram, DBTable, DBField, etc.)
+├── parsing/                    # Shared: format detection + routing
+├── sql/                        # SQL parsing pipeline
+│   ├── detect-db-type.ts       # Weighted pattern matching
+│   ├── sql-import.ts           # SQL → tables and relationships
+│   ├── sample-schemas.ts       # Built-in sample schemas
+│   ├── schema-templates.ts     # Extended templates (Social, IoT, LMS, Analytics)
+│   └── dialects/               # node-sql-parser + regex parsers
+├── drizzle/ prisma/ typeorm/ sequelize/ mikroorm/ kysely/ dbml/  # Regex-based parsers
+├── export/                     # Markdown/Mermaid/DBML/PlantUML/Prisma/Drizzle
+├── sql-export/                 # Cross-dialect SQL generation (CASCADE, INDEX, COMMENT ON, ENUM, VIEW)
+├── analysis/                   # Schema analyzer + diff engine
+├── ai/                         # AI service + prompt context builder
+├── dump/                       # SQL dump parser + type inference + fake data generator
+├── layout/                     # Auto-layout algorithm (BFS + grid)
+└── sharing/                    # URL encoding (lz-string)
+
 src/
 ├── app/
-│   ├── layout.tsx              # Root layout + theme script
+│   ├── layout.tsx              # Root layout + theme script + CSP <meta>
 │   ├── page.tsx                # Main page (Landing ↔ Editor)
 │   ├── globals.css             # Theme variables (dark + light)
 │   └── _components/
-│       ├── canvas/             # EditorLayout, SchemaCanvas, TableNode, RelationshipEdge
-│       ├── landing/            # Landing page with sample schemas
+│       ├── canvas/             # EditorLayout, SchemaCanvas, TableNode, StickyNoteNode, RelationshipEdge
+│       ├── landing/            # Landing page with sample schemas + recent projects
 │       ├── schema/             # SchemaUpload modal, SchemaSidebar (grouping, zoom, stats)
 │       ├── ai/                 # AIPanel (Chat + Challenge + History)
 │       ├── analysis/           # SchemaDiffPanel (with AI comparison)
-│       ├── data/               # DataExplorer + DataCharts (histograms, AI charts)
-│       ├── export/             # ExportDialog (10 format tabs)
+│       ├── data/               # DataExplorer, DataCharts, DataChat
+│       ├── export/             # ExportDialog
 │       ├── source/             # SourceViewer (original schema code)
 │       └── settings/           # APIKeySettings modal
+├── workers/                    # Schema parsing, dump parsing and fake data off the main thread
 ├── lib/
-│   ├── domain/                 # Zod schemas (Diagram, DBTable, DBField, etc.)
-│   ├── sql/                    # SQL parsing pipeline
-│   │   ├── detect-db-type.ts   # Weighted pattern matching
-│   │   ├── sql-import.ts       # Main entry: parseSQLToDiagram()
-│   │   ├── sample-schemas.ts   # Built-in sample schemas
-│   │   ├── schema-templates.ts # Extended templates (Social, IoT, LMS, Analytics)
-│   │   └── dialects/           # node-sql-parser + regex parsers
-│   ├── drizzle/                # Drizzle ORM parser
-│   ├── prisma/                 # Prisma schema parser
-│   ├── typeorm/                # TypeORM entity parser
-│   ├── sequelize/              # Sequelize ORM parser
-│   ├── mikroorm/               # MikroORM entity parser
-│   ├── kysely/                 # Kysely type definition parser
-│   ├── dbml/                   # DBML parser
-│   ├── ai/                     # AI service + prompt context builder
-│   ├── analysis/               # Schema analyzer + diff engine
-│   ├── sharing/                # URL encoding (lz-string)
-│   ├── storage/                # Cookie (AI keys) + localStorage (diagrams)
-│   ├── layout/                 # Auto-layout algorithm (BFS + grid)
-│   ├── parsing/                # Shared: format detection + routing
-│   ├── export/                 # PNG/SVG/PDF/Markdown/Mermaid/DBML/PlantUML/Prisma/Drizzle
-│   ├── sql-export/             # Cross-dialect SQL generation (CASCADE, INDEX, COMMENT ON, ENUM, VIEW)
-│   ├── dump/                   # SQL dump parser + type inference + fake data generator
-│   ├── i18n/                   # Translations (en.ts, fr.ts) + context provider
-│   └── utils.ts                # generateId, getTableColor, cn()
+│   ├── parsing/                # Cancellable worker requests
+│   ├── graph/                  # Relationship index + navigation filters
+│   ├── project/                # Versioned .dbschema.json project files
+│   ├── storage/                # AI settings + encrypted key (localStorage / IndexedDB), projects (localStorage)
+│   ├── security/               # Content-Security-Policy (meta tag in export, header in standalone)
+│   ├── export/                 # PNG/SVG/PDF
+│   ├── sharing/                # URL fragment with diagram, notes and view settings
+│   ├── i18n/                   # 8 locales + context provider
+│   └── utils.ts                # cn() class-name helper
 ├── hooks/
 │   ├── use-theme.ts            # Dark/Light toggle + localStorage
+│   ├── use-project-session.ts  # Autosave, notes, view settings
 │   └── use-keyboard-shortcuts.ts
 ├── components/ui/              # Radix UI wrappers (Button, Tooltip)
-└── __tests__/                  # 48 test files, 616 tests
+└── __tests__/                  # Component, hook and lib tests
+```
+
+The AI model picker builds its catalog in the browser from models.dev and OpenRouter when the settings open ([`llm-models`](https://www.npmjs.com/package/llm-models), loaded on demand through llm-connect's `liveCatalog`): only providers the app can call, deprecated models dropped, only the fields the app uses kept. `public/models.json` is the offline fallback; `pnpm fetch-models` writes it before each build and it is not committed.
+
+### Self-hosting with Docker
+
+The two-stage `Dockerfile` (builder → runner, `node:24-alpine`, non-root user) builds the standalone Next.js server, which also sends the CSP and security headers. Images are published to GHCR on releases.
+
+```bash
+docker compose up --build   # http://localhost:3000
 ```
 
 ---

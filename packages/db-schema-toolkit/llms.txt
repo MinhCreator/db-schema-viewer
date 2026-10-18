@@ -10,6 +10,12 @@ The CLI binary is `db-schema-toolkit`. Install globally or use via `npx`:
 npx db-schema-toolkit <command> [options]
 ```
 
+Requires Node.js 20+. Use `-` as the file to read from stdin; add `--filename <name>` to hint the format (otherwise it is detected from the content):
+
+```bash
+cat schema.prisma | db-schema-toolkit parse - --filename schema.prisma
+```
+
 ## Commands
 
 ### export — Convert a schema to another format
@@ -90,11 +96,11 @@ Parses any supported schema format and outputs the full `Diagram` object as JSON
 ### info — Schema summary
 
 ```bash
-db-schema-toolkit info <file> [--json]
+db-schema-toolkit info <file> [--json] [--output <file>]
 ```
 
 Displays a quick overview: table names, field names with types, primary keys, foreign keys, unique constraints.
-Use `--json` for machine-readable output.
+Use `--json` for machine-readable output (`name`, `databaseType`, `tables`, `views`, `fields`, `relationships`, `tableDetails`).
 
 ### generate — Generate fake data
 
@@ -102,7 +108,7 @@ Use `--json` for machine-readable output.
 db-schema-toolkit generate <file> [--rows <n>] [--seed <n>] [--output <file>]
 ```
 
-Generates fake data from a schema. Output is JSON array of tables with columns and rows.
+Generates fake data from a schema, following foreign keys. Output is a JSON array of `{ name, columns, rows }` tables.
 - `--rows` (`-r`): number of rows per table (default: 30)
 - `--seed` (`-s`): seed for reproducible results (default: 42)
 
@@ -112,12 +118,14 @@ Generates fake data from a schema. Output is JSON array of tables with columns a
 db-schema-toolkit share <file>
 ```
 
-Outputs a URL that opens the schema in the web viewer (https://maxgfr.github.io/db-schema-viewer/).
+Outputs a URL that opens the schema in the web viewer (https://maxgfr.github.io/db-schema-viewer/). The schema is compressed into the `#d=` fragment, not uploaded.
 
-### help
+### help / version
 
 ```bash
-db-schema-toolkit help
+db-schema-toolkit help          # Usage and examples
+db-schema-toolkit help --llm    # Help optimized for AI agents
+db-schema-toolkit version       # Print version
 ```
 
 ## Supported Input Formats
@@ -125,13 +133,13 @@ db-schema-toolkit help
 | Format | File extension | Detection |
 |--------|---------------|-----------|
 | SQL (PostgreSQL, MySQL, SQLite, MariaDB, Supabase, CockroachDB, ClickHouse, BigQuery, Snowflake) | `.sql` | Extension |
-| Drizzle ORM | `.ts` | `drizzle-orm` imports |
+| Drizzle ORM | `.ts`, `.js` | `drizzle-orm` imports or `pgTable`/`mysqlTable`/`sqliteTable` |
 | Prisma | `.prisma` | Extension |
 | DBML | `.dbml` | Extension |
-| TypeORM | `.ts` | `@Entity` decorator |
-| MikroORM | `.ts` | `@mikro-orm` imports |
-| Sequelize | `.ts`, `.js` | `sequelize.define` |
-| Kysely | `.ts` | `kysely` imports |
+| TypeORM | `.ts` | `@Entity` / `@Column` decorators |
+| MikroORM | `.ts` | `@Entity` with `@Property` / `@PrimaryKey` |
+| Sequelize | `.ts`, `.js` | `sequelize.define` or `Model.init` with `DataTypes` |
+| Kysely | `.ts` | `Database` interface/type with `Generated<` |
 
 Format is auto-detected from the file extension and content heuristics.
 

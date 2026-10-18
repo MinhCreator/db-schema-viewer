@@ -44,3 +44,24 @@ it("returns a structured challenge", async () => {
   vi.mocked(generateObject).mockResolvedValue({ object: result } as any);
   expect(await challengeSchema(settings, diagram)).toEqual(result);
 });
+it("sends every row of a small dump to the data chat, and forbids guessing unseen values", async () => {
+  vi.mocked(streamText).mockReturnValue({ textStream: (async function* () { yield "ok"; })() } as any);
+  const rows = Array.from({ length: 80 }, (_, i) => ({ id: `EMP${1000 + i}`, salary: 40000 + i }));
+  await queryData(settings, [{ name: "employees", columns: ["id", "salary"], rows }], "Salary of EMP1060?", vi.fn(), vi.fn());
+  const { system } = vi.mocked(streamText).mock.calls[0]![0] as { system: string };
+  expect(system).toContain("Data rows: all 80 rows.");
+  expect(system).toContain("id=EMP1060, salary=40060");
+  expect(system).toContain("sum=3203160");
+  expect(system).toContain("Never infer, extrapolate or guess");
+});
+it("sends the first rows of a large dump that fit the budget, labelled as such", async () => {
+  vi.mocked(streamText).mockReturnValue({ textStream: (async function* () { yield "ok"; })() } as any);
+  const rows = Array.from({ length: 5000 }, (_, i) => ({ id: `EMP${1000 + i}`, salary: 40000 + i }));
+  await queryData(settings, [{ name: "employees", columns: ["id", "salary"], rows }], "Anything?", vi.fn(), vi.fn());
+  const { system } = vi.mocked(streamText).mock.calls[0]![0] as { system: string };
+  const shown = Number(system.match(/rows 1 to (\d+) of 5000\./)![1]);
+  expect(shown).toBeGreaterThan(100);
+  expect(system).toContain(`id=EMP${1000 + shown - 1},`);
+  expect(system).not.toContain(`id=EMP${1000 + shown},`);
+  expect(system).toContain("left out on purpose");
+});

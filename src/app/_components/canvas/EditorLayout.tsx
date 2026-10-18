@@ -42,6 +42,14 @@ const DataExplorer = dynamic(() => import("../data/DataExplorer").then((m) => m.
 const APIKeySettings = dynamic(() => import("../settings/APIKeySettings").then((m) => m.APIKeySettings), { ssr: false });
 const SchemaDiffPanel = dynamic(() => import("../analysis/SchemaDiffPanel").then((m) => m.SchemaDiffPanel), { ssr: false });
 const SourceViewer = dynamic(() => import("../source/SourceViewer").then((m) => m.SourceViewer), { ssr: false });
+
+/** Relationships whose two tables and two field handles exist on the canvas. */
+function countRenderableRelationships(diagram: Diagram): number {
+  const fieldsByTable = new Map(diagram.tables.map((table) => [table.id, new Set(table.fields.map((field) => field.id))]));
+  return diagram.relationships.filter((rel) =>
+    fieldsByTable.get(rel.sourceTableId)?.has(rel.sourceFieldId) && fieldsByTable.get(rel.targetTableId)?.has(rel.targetFieldId),
+  ).length;
+}
 import { shuffleLayout } from "db-schema-toolkit";
 import { useTranslation } from "@/lib/i18n/context";
 import { LanguageToggle } from "../I18nWrapper";
@@ -49,13 +57,26 @@ import { LanguageToggle } from "../I18nWrapper";
 interface EditorLayoutProps {
   project: Project;
   onProjectChange: (update: Partial<Project> | ((project: Project) => Partial<Project>)) => void;
-  onProjectOpened: (project: Project) => void;
+  onProjectOpened: (project: Project) => boolean | void;
   saveStatus: SaveStatus;
   onSave: () => boolean;
   onBack: () => void;
   theme: Theme;
   themeMode: ThemeMode;
   onToggleTheme: () => void;
+}
+
+/**
+ * The center of the visible canvas in diagram coordinates, read from the
+ * pane's actual transform: a new note lands where the user is looking, not at
+ * a fixed spot that is off-screen once the view is panned, zoomed or narrow.
+ */
+function visibleCenter(): { x: number; y: number } {
+  const pane = document.querySelector(".react-flow")?.getBoundingClientRect();
+  const viewport = document.querySelector(".react-flow__viewport");
+  if (!pane || !viewport) return { x: 200, y: 200 };
+  const { a: zoom, e: tx, f: ty } = new DOMMatrixReadOnly(getComputedStyle(viewport).transform);
+  return { x: (pane.width / 2 - tx) / (zoom || 1), y: (pane.height / 2 - ty) / (zoom || 1) };
 }
 
 export function EditorLayout({ project, onProjectChange, onProjectOpened, saveStatus, onSave, onBack, theme, themeMode, onToggleTheme }: EditorLayoutProps) {
@@ -82,6 +103,9 @@ export function EditorLayout({ project, onProjectChange, onProjectOpened, saveSt
   const [showSidebar, setShowSidebar] = useState(true);
   const [fitRequest, setFitRequest] = useState(0);
   const [exportAll, setExportAll] = useState(false);
+  // React Flow drops an edge whose table or field handle is missing, so the export
+  // must wait for those that can render, not for every stored relationship.
+  const renderableEdges = useMemo(() => countRenderableRelationships(diagram), [diagram]);
   const captureFullDiagram = useCallback(async <T,>(capture: () => Promise<T>): Promise<T> => {
     flushSync(() => setExportAll(true));
     try {
@@ -92,7 +116,7 @@ export function EditorLayout({ project, onProjectChange, onProjectOpened, saveSt
         const check = () => {
           const viewport = document.querySelector(".react-flow__viewport");
           if (viewport?.querySelectorAll(".react-flow__node-table").length === diagram.tables.length
-            && viewport.querySelectorAll(".react-flow__edge-path").length === diagram.relationships.length) resolve();
+            && viewport.querySelectorAll(".react-flow__edge-path").length === renderableEdges) resolve();
           else if (performance.now() >= deadline) reject(new Error("Diagram is not ready for export"));
           else requestAnimationFrame(check);
         };
@@ -100,7 +124,7 @@ export function EditorLayout({ project, onProjectChange, onProjectOpened, saveSt
       });
       return await capture();
     } finally { flushSync(() => setExportAll(false)); }
-  }, [diagram.tables.length, diagram.relationships.length]);
+  }, [diagram.tables.length, renderableEdges]);
   const { t } = useTranslation();
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
@@ -134,9 +158,10 @@ export function EditorLayout({ project, onProjectChange, onProjectOpened, saveSt
   const handleAddAnnotation = useCallback(() => {
     annotationCounter.current++;
     const id = `note-${annotationCounter.current}-${Date.now()}`;
+    const { x, y } = visibleCenter();
     setAnnotations((prev) => [
       ...prev,
-      { id, text: "", x: 100 + Math.random() * 200, y: 100 + Math.random() * 200, color: String(annotationCounter.current % 4) },
+      { id, text: "", x: x - 90 + (Math.random() - 0.5) * 60, y: y - 40 + (Math.random() - 0.5) * 60, color: String(annotationCounter.current % 4) },
     ]);
   }, [setAnnotations]);
 
@@ -337,8 +362,8 @@ export function EditorLayout({ project, onProjectChange, onProjectOpened, saveSt
           <button
             onClick={onToggleTheme}
             className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            title={t("common.themeMode", { mode: themeMode })}
-            aria-label={t("common.themeMode", { mode: themeMode })}
+            title={t("common.themeMode", { mode: t(`theme.mode.${themeMode}`) })}
+            aria-label={t("common.themeMode", { mode: t(`theme.mode.${themeMode}`) })}
           >
             {themeMode === "system" ? <Monitor className="h-4 w-4" /> : theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </button>

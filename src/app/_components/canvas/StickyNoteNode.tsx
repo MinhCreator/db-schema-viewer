@@ -40,25 +40,32 @@ function StickyNoteNodeComponent({ id, data }: NodeProps) {
       className={`group relative min-w-[140px] max-w-[220px] rounded-lg border-2 ${colorClasses} p-3 shadow-lg`}
     >
       {/* Top bar: color dots + delete */}
-      <div className="absolute -top-2 right-0 left-0 flex items-center justify-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+      <div className="absolute -top-2 right-0 left-0 flex items-center justify-center gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
         {showColors && NOTE_COLORS.map((c) => (
           <button
             key={c.id}
+            type="button"
             onClick={() => { onColorChange?.(id, c.id); setShowColors(false); }}
             className={`h-4 w-4 rounded-full border border-white/50 shadow-sm ${c.dot} hover:scale-125 transition-transform`}
-            title={`Color ${c.id}`}
+            title={t("stickyNote.color", { number: Number(c.id) + 1 })}
+            aria-label={t("stickyNote.color", { number: Number(c.id) + 1 })}
           />
         ))}
         {!showColors && (
           <button
+            type="button"
             onClick={() => setShowColors(true)}
             className={`h-4 w-4 rounded-full border border-white/50 shadow-sm ${NOTE_COLORS[parseInt(color) % NOTE_COLORS.length]?.dot ?? "bg-yellow-400"}`}
-            title="Change color"
+            title={t("stickyNote.changeColor")}
+            aria-label={t("stickyNote.changeColor")}
           />
         )}
         <button
+          type="button"
           onClick={() => onDelete(id)}
           className="ml-1 rounded-full bg-card p-0.5 shadow-sm hover:bg-red-100 dark:hover:bg-red-900/50"
+          title={t("stickyNote.delete")}
+          aria-label={t("stickyNote.delete")}
         >
           <X className="h-3 w-3 text-muted-foreground" />
         </button>
@@ -80,6 +87,14 @@ function StickyNoteNodeComponent({ id, data }: NodeProps) {
       ) : (
         <div
           onDoubleClick={() => setIsEditing(true)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              setIsEditing(true);
+            }
+          }}
+          role="button"
+          tabIndex={0}
           className="cursor-text whitespace-pre-wrap text-xs text-gray-800 dark:text-gray-100"
           title={t("stickyNote.doubleClickToEdit")}
         >

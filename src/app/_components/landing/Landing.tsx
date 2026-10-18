@@ -36,7 +36,8 @@ import { useTranslation } from "@/lib/i18n/context";
 import { LanguageToggle } from "../I18nWrapper";
 
 interface LandingProps {
-  onProjectOpened: (project: Project) => void;
+  /** Returns false when the project could not be opened (the caller reports why). */
+  onProjectOpened: (project: Project) => boolean | void;
   theme: Theme;
   themeMode: ThemeMode;
   onToggleTheme: () => void;
@@ -112,7 +113,7 @@ export function Landing({ onProjectOpened, theme, themeMode, onToggleTheme }: La
   const handleSQLParsed = useCallback(async (sql: string, fileName?: string, signal?: AbortSignal) => {
     const project = await parseSchemaInput(sql, fileName, signal);
     signal?.throwIfAborted();
-    onProjectOpened(project);
+    if (onProjectOpened(project) === false) return;
     toast.success(t("common.loadedTables", { tables: project.diagram.tables.length, rels: project.diagram.relationships.length }));
   }, [onProjectOpened, t]);
 
@@ -138,7 +139,7 @@ export function Landing({ onProjectOpened, theme, themeMode, onToggleTheme }: La
   ];
 
   return (
-    <div className="min-h-screen">
+    <div className="relative min-h-screen">
       {/* Theme + Language toggle */}
       <div className="absolute right-4 top-4 z-10 flex items-center gap-1.5 rounded-lg border border-border bg-card px-1.5 py-1">
         <LanguageToggle />
@@ -146,8 +147,8 @@ export function Landing({ onProjectOpened, theme, themeMode, onToggleTheme }: La
         <button
           onClick={onToggleTheme}
           className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-          title={t("common.themeMode", { mode: themeMode })}
-          aria-label={t("common.themeMode", { mode: themeMode })}
+          title={t("common.themeMode", { mode: t(`theme.mode.${themeMode}`) })}
+          aria-label={t("common.themeMode", { mode: t(`theme.mode.${themeMode}`) })}
         >
           {themeMode === "system" ? <Monitor className="h-4 w-4" /> : theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
         </button>

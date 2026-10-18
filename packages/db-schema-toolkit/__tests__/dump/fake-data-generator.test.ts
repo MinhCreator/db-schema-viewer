@@ -602,4 +602,41 @@ describe("generateFakeData", () => {
     expect(result).toHaveLength(20);
     expect(result[0]!.rows).toHaveLength(100);
   });
+
+  it("generates timestamps, not booleans, for *_at columns that start like flags", () => {
+    const tables: DBTable[] = [
+      makeTable("t1", "posts", [
+        makeField("f1", "id", "INT", { primaryKey: true }),
+        makeField("f2", "deleted_at", "TIMESTAMP", { nullable: false }),
+        makeField("f3", "published_at", "TEXT", { nullable: false }),
+        makeField("f4", "is_deleted", "BOOLEAN", { nullable: false }),
+      ]),
+    ];
+    const [posts] = generateFakeData(tables, [], { rowCount: 5 });
+    for (const row of posts!.rows) {
+      expect(row.deleted_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+      expect(row.published_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+      expect(typeof row.is_deleted).toBe("boolean");
+    }
+  });
+
+  it("takes a column that is both PK and FK from the parent table", () => {
+    const tables: DBTable[] = [
+      makeTable("t1", "users", [
+        makeField("f1", "id", "UUID", { primaryKey: true }),
+      ]),
+      makeTable("t2", "profiles", [
+        makeField("f2", "user_id", "UUID", { primaryKey: true, isForeignKey: true }),
+        makeField("f3", "bio", "TEXT"),
+      ]),
+    ];
+    const relationships: DBRelationship[] = [
+      { id: "r1", sourceTableId: "t2", sourceFieldId: "f2", targetTableId: "t1", targetFieldId: "f1", cardinality: "one-to-one" },
+    ];
+    const result = generateFakeData(tables, relationships, { rowCount: 5 });
+    const userIds = result.find((t) => t.name === "users")!.rows.map((r) => r.id);
+    const profileIds = result.find((t) => t.name === "profiles")!.rows.map((r) => r.user_id);
+    for (const id of profileIds) expect(userIds).toContain(id);
+    expect(new Set(profileIds).size).toBe(profileIds.length);
+  });
 });

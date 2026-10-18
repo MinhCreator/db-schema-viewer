@@ -1,49 +1,26 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { X, Key, Eye, EyeOff, Server, Loader2, Zap, Check, AlertTriangle, Search, Globe } from "lucide-react";
+import { ENDPOINT_PRESETS, liveCatalog, RESPONSE_LANGUAGES } from "llm-connect";
+import { useLlmStore } from "llm-connect/react";
 import { useTranslation } from "@/lib/i18n/context";
-import {
-  loadAISettings,
-  saveAISettings,
-  clearAISettings,
-  type AISettings,
-} from "@/lib/storage/cookie-storage";
-import { querySchema } from "db-schema-toolkit/ai";
+import { aiSettingsStorage } from "@/lib/storage/ai-settings";
 
-/* ---------- Catalog types ---------- */
+const OLLAMA = ENDPOINT_PRESETS.ollama;
+const LM_STUDIO = ENDPOINT_PRESETS.lmstudio;
 
-interface ModelInfo {
-  id: string;
-  name: string;
-  description?: string;
-  providerName?: string;
-  tool_call?: boolean;
-  reasoning?: boolean;
-}
+// Built in the browser from models.dev on first open, shared by every dialog;
+// the models.json written at build time is the fallback.
+const catalog = liveCatalog({ fallbackUrl: `${process.env.NEXT_PUBLIC_BASE_PATH || ""}/models.json` });
 
-interface ProviderInfo {
-  id: string;
-  name: string;
-  npm?: string;
-  api?: string;
-  models: Record<string, ModelInfo>;
-}
-
-type ModelCatalog = Record<string, ProviderInfo>;
-
-/* ---------- Defaults ---------- */
-
-const RECOMMENDED_PROVIDER_IDS = ["openai", "anthropic", "google", "mistral"];
-
-const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
-  openai: "gpt-4o",
-  anthropic: "claude-sonnet-4-6",
-  google: "gemini-2.5-flash",
-  mistral: "mistral-large-latest",
-};
+const SAVE_ERRORS = {
+  incomplete: "settings.fillEndpointAndModel",
+  "invalid-endpoint": "settings.invalidEndpoint",
+  "insecure-endpoint": "settings.insecureEndpoint",
+} as const;
 
 /* ---------- Component ---------- */
 
@@ -53,147 +30,55 @@ interface APIKeySettingsProps {
 
 export function APIKeySettings({ onClose }: APIKeySettingsProps) {
   const { t } = useTranslation();
-  const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState("gpt-4o");
-  const [providerId, setProviderId] = useState("openai");
-  const [customEndpoint, setCustomEndpoint] = useState("");
-  const [customModel, setCustomModel] = useState("");
+  const { state, store } = useLlmStore({ catalog, storage: aiSettingsStorage });
   const [showKey, setShowKey] = useState(false);
-  const [useCustomEndpoint, setUseCustomEndpoint] = useState(false);
-  const [isTesting, setIsTesting] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [language, setLanguage] = useState("English");
 
-  // Catalog state
-  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
-  const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
+  const { draft, search: searchTerm, recommendedModel } = state;
+  const useCustomEndpoint = draft.custom;
+  const { customEndpoint, customModel, model, providerId, rememberKey, language } = draft;
+  const apiKey = state.apiKey;
+  const isLoadingCatalog = state.catalogStatus === "idle" || state.catalogStatus === "loading";
+  const catalogError = state.catalogStatus === "error";
+  const modelOptions = state.models;
+  const providerModelCount = state.provider ? Object.keys(state.provider.models).length : 0;
 
-  // Load saved settings
+  // Download the catalog and load the saved settings
   useEffect(() => {
-    const saved = loadAISettings();
-    if (saved) {
-      setApiKey(saved.apiKey);
-      setModel(saved.model);
-      setProviderId(saved.providerId);
-      setCustomEndpoint(saved.customEndpoint ?? "");
-      setCustomModel(saved.customModel ?? "");
-      setUseCustomEndpoint(!!saved.customEndpoint);
-      setLanguage(saved.language ?? "English");
+    store.open();
+    store.load().catch((err) => {
+      console.error("Failed to load AI settings:", err);
+    });
+  }, [store]);
+
+  const handleSave = async () => {
+    try {
+      const result = await store.save();
+      if (!result.ok) {
+        toast.error(t(SAVE_ERRORS[result.reason]));
+        return;
+      }
+    } catch (err) {
+      console.error("Failed to save AI settings:", err);
+      toast.error(err instanceof Error ? err.message : String(err));
+      return;
     }
-  }, []);
-
-  // Load catalog from models.json
-  useEffect(() => {
-    if (!catalog && !isLoadingCatalog) {
-      setIsLoadingCatalog(true);
-      const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
-      fetch(`${basePath}/models.json`)
-        .then((res) => res.json())
-        .then((data: ModelCatalog) => {
-          setCatalog(data);
-          setIsLoadingCatalog(false);
-        })
-        .catch((err) => {
-          console.error("Failed to load models catalog:", err);
-          setIsLoadingCatalog(false);
-        });
-    }
-  }, [catalog, isLoadingCatalog]);
-
-  // Provider derived from catalog
-  const selectedProvider = useMemo(() => {
-    return catalog?.[providerId] ?? null;
-  }, [catalog, providerId]);
-
-  // Split providers into recommended / others
-  const providerSelectOptions = useMemo(() => {
-    if (!catalog) return { recommended: [], others: [] };
-
-    const allProviders = Object.values(catalog);
-
-    const recommended = RECOMMENDED_PROVIDER_IDS
-      .map((id) => allProviders.find((p) => p.id === id))
-      .filter(Boolean) as ProviderInfo[];
-
-    const others = allProviders
-      .filter((p) => !RECOMMENDED_PROVIDER_IDS.includes(p.id))
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    return {
-      recommended: recommended.map((p) => ({ id: p.id, name: p.name })),
-      others: others.map((p) => ({ id: p.id, name: p.name })),
-    };
-  }, [catalog]);
-
-  // Filtered model list for current provider
-  const modelOptions = useMemo(() => {
-    if (!selectedProvider) return [];
-    const models = Object.values(selectedProvider.models).map((m) => ({
-      ...m,
-      providerName: selectedProvider.name,
-    }));
-
-    if (!searchTerm.trim()) return models;
-
-    const search = searchTerm.toLowerCase();
-    return models.filter(
-      (m) =>
-        m.name.toLowerCase().includes(search) ||
-        m.id.toLowerCase().includes(search),
-    );
-  }, [selectedProvider, searchTerm]);
-
-  // Provider metadata for saving
-  const providerMeta = useMemo(() => {
-    if (selectedProvider) {
-      return {
-        providerId: selectedProvider.id,
-        providerName: selectedProvider.name,
-        providerNpm: selectedProvider.npm ?? "",
-        providerApi: selectedProvider.api ?? "",
-      };
-    }
-    return {
-      providerId: "openai",
-      providerName: "OpenAI",
-      providerNpm: "@ai-sdk/openai",
-      providerApi: "https://api.openai.com/v1",
-    };
-  }, [selectedProvider]);
-
-  const buildSettings = useCallback((): AISettings => {
-    return {
-      apiKey,
-      model,
-      providerId: providerMeta.providerId,
-      providerName: providerMeta.providerName,
-      providerNpm: providerMeta.providerNpm,
-      providerApi: providerMeta.providerApi,
-      customEndpoint: useCustomEndpoint ? customEndpoint : undefined,
-      customModel: useCustomEndpoint ? customModel : undefined,
-      language,
-    };
-  }, [apiKey, model, providerMeta, useCustomEndpoint, customEndpoint, customModel, language]);
-
-  const handleSave = () => {
-    const settings = buildSettings();
-    saveAISettings(settings);
     toast.success(t("settings.saved"));
     onClose();
   };
 
-  const handleClear = () => {
-    clearAISettings();
-    setApiKey("");
-    setCustomEndpoint("");
-    setCustomModel("");
-    setUseCustomEndpoint(false);
+  const handleClear = async () => {
+    try {
+      await store.clear();
+    } catch (err) {
+      console.error("Failed to clear AI settings:", err);
+      toast.error(err instanceof Error ? err.message : String(err));
+      return;
+    }
     toast.success(t("settings.cleared"));
   };
 
-  const handleTestConnection = useCallback(async () => {
-    const settings = buildSettings();
-    if (!settings.apiKey && !useCustomEndpoint) {
+  const handleTestConnection = async () => {
+    if (!apiKey && !useCustomEndpoint) {
       toast.error(t("settings.enterApiKeyFirst"));
       return;
     }
@@ -202,64 +87,28 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
       return;
     }
 
-    setIsTesting(true);
-    try {
-      if (useCustomEndpoint) {
-        const res = await fetch(`${customEndpoint.replace(/\/+$/, "")}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
-          },
-          body: JSON.stringify({
-            model: customModel,
-            messages: [{ role: "user", content: "hi" }],
-            max_tokens: 1,
-            stream: false,
-          }),
-        });
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          throw new Error(`HTTP ${res.status}: ${body || res.statusText}`);
-        }
-      } else {
-        const minDiagram = {
-          id: "t", name: "t", databaseType: "generic" as const,
-          tables: [{
-            id: "t", name: "t", fields: [{ id: "f", name: "id", type: "int", primaryKey: true, unique: false, nullable: false, isForeignKey: false }],
-            indexes: [], x: 0, y: 0, isView: false,
-          }],
-          relationships: [], createdAt: "",
-        };
-        await querySchema(settings, minDiagram, "Say OK in 2 words max", () => {}, () => {}, []);
-      }
+    const result = await store.test();
+    if (result.ok) {
       toast.success(t("settings.connectionSuccessful"));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : t("settings.connectionFailed");
-      if (message.includes("Failed to fetch")) {
-        toast.error(t("settings.connectionFailed"), {
-          description: t("settings.connectionFailedCors"),
-        });
-      } else {
-        toast.error(message);
-      }
-    } finally {
-      setIsTesting(false);
+    } else if (result.reason === "cors") {
+      toast.error(t("settings.connectionFailed"), {
+        description: t("settings.connectionFailedCors"),
+      });
+    } else if (result.reason === "insecure") {
+      toast.error(t("settings.insecureEndpoint"));
+    } else {
+      toast.error(result.message ?? t("settings.connectionFailed"));
     }
-  }, [buildSettings, useCustomEndpoint, customEndpoint, customModel, t]);
-
-  // Recommended model for the current provider
-  const recommendedModelId = DEFAULT_MODEL_BY_PROVIDER[providerId];
-  const recommendedModel = recommendedModelId
-    ? modelOptions.find((m) => m.id === recommendedModelId)
-    : null;
+  };
 
   const modalContent = (
     <>
       <div className="fixed inset-0 z-50 bg-gray-950/90 backdrop-blur-sm" onClick={onClose} />
       <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-4">
         <div
-          className="animate-scale-in pointer-events-auto max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-border bg-card shadow-2xl"
+          // Fixed height: only the content scrolls, so the footer buttons never
+          // move when the model list arrives
+          className="animate-scale-in pointer-events-auto flex h-[min(90vh,52rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
@@ -276,7 +125,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
           </div>
 
           {/* Content */}
-          <div className="space-y-5 p-6">
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-6">
             {/* Security notice */}
             <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-400">
               {t("settings.securityNotice")}
@@ -287,7 +136,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
               <input
                 type="checkbox"
                 checked={useCustomEndpoint}
-                onChange={(e) => setUseCustomEndpoint(e.target.checked)}
+                onChange={(e) => store.toggleCustom(e.target.checked)}
                 className="rounded border-border"
               />
               <Server className="h-4 w-4 text-muted-foreground" />
@@ -300,12 +149,9 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      setCustomEndpoint("http://localhost:11434/v1");
-                      if (!customModel.trim()) setCustomModel("llama3.2");
-                    }}
+                    onClick={() => store.applyPreset(OLLAMA)}
                     className={`flex-1 rounded-lg border p-2 text-center text-sm font-medium transition-all ${
-                      customEndpoint === "http://localhost:11434/v1"
+                      customEndpoint === OLLAMA.endpoint
                         ? "border-emerald-500 bg-emerald-500/15 text-foreground"
                         : "border-border bg-accent text-foreground hover:border-emerald-500/50"
                     }`}
@@ -315,12 +161,9 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setCustomEndpoint("http://localhost:1234/v1");
-                      if (!customModel.trim()) setCustomModel("lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF");
-                    }}
+                    onClick={() => store.applyPreset(LM_STUDIO)}
                     className={`flex-1 rounded-lg border p-2 text-center text-sm font-medium transition-all ${
-                      customEndpoint === "http://localhost:1234/v1"
+                      customEndpoint === LM_STUDIO.endpoint
                         ? "border-emerald-500 bg-emerald-500/15 text-foreground"
                         : "border-border bg-accent text-foreground hover:border-emerald-500/50"
                     }`}
@@ -335,7 +178,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                   <input
                     type="text"
                     value={customEndpoint}
-                    onChange={(e) => setCustomEndpoint(e.target.value)}
+                    onChange={(e) => store.setEndpoint(e.target.value)}
                     placeholder={t("settings.apiBaseUrlPlaceholder")}
                     className="w-full rounded-lg border border-border bg-accent px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-indigo-500 focus:outline-none"
                   />
@@ -348,7 +191,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                   <input
                     type="text"
                     value={customModel}
-                    onChange={(e) => setCustomModel(e.target.value)}
+                    onChange={(e) => store.setCustomModel(e.target.value)}
                     placeholder={t("settings.modelNamePlaceholder")}
                     className="w-full rounded-lg border border-border bg-accent px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-indigo-500 focus:outline-none"
                   />
@@ -364,44 +207,41 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                       <Loader2 className="h-4 w-4 animate-spin" />
                       {t("settings.loadingProviders")}
                     </div>
+                  ) : catalogError ? (
+                    <div role="alert" className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-400">
+                      <span>{t("settings.catalogError")}</span>
+                      <button
+                        type="button"
+                        onClick={store.retryCatalog}
+                        className="rounded-md border border-amber-500/40 px-2 py-1 text-xs font-medium hover:bg-amber-500/10"
+                      >
+                        {t("settings.retry")}
+                      </button>
+                    </div>
                   ) : (
                     <select
                       value={providerId}
-                      onChange={(e) => {
-                        const newProviderId = e.target.value;
-                        setProviderId(newProviderId);
-                        setSearchTerm("");
-                        // Auto-select recommended model or first available
-                        const defaultModel = DEFAULT_MODEL_BY_PROVIDER[newProviderId];
-                        const provider = catalog?.[newProviderId];
-                        if (provider) {
-                          const models = Object.keys(provider.models);
-                          if (defaultModel && models.includes(defaultModel)) {
-                            setModel(defaultModel);
-                          } else if (models[0]) {
-                            setModel(models[0]);
-                          }
-                        }
-                      }}
+                      // Switches to the provider's recommended model, or its first one
+                      onChange={(e) => store.selectProvider(e.target.value)}
                       className="w-full rounded-lg border border-border bg-accent px-3 py-2 text-sm text-foreground focus:outline-none"
                     >
-                      {providerSelectOptions.recommended.length > 0 && (
+                      {state.providers.recommended.length > 0 && (
                         <optgroup label={t("settings.recommended")}>
-                          {providerSelectOptions.recommended.map((p) => (
+                          {state.providers.recommended.map((p) => (
                             <option key={p.id} value={p.id}>{p.name}</option>
                           ))}
                         </optgroup>
                       )}
-                      {providerSelectOptions.others.length > 0 && (
+                      {state.providers.others.length > 0 && (
                         <optgroup label={t("settings.otherProviders")}>
-                          {providerSelectOptions.others.map((p) => (
+                          {state.providers.others.map((p) => (
                             <option key={p.id} value={p.id}>{p.name}</option>
                           ))}
                         </optgroup>
                       )}
                     </select>
                   )}
-                  {providerSelectOptions.others.some((p) => p.id === providerId) && (
+                  {state.provider && !state.isRecommendedProvider && (
                     <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2">
                       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
                       <p className="text-xs text-amber-400">
@@ -424,7 +264,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                       </div>
                       <button
                         type="button"
-                        onClick={() => setModel(recommendedModel.id)}
+                        onClick={() => store.selectModel(recommendedModel.id)}
                         className={`w-full rounded-lg border p-2.5 text-left text-sm transition-all ${
                           model === recommendedModel.id
                             ? "border-emerald-500 bg-emerald-500/15 text-foreground"
@@ -440,13 +280,13 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                   )}
 
                   {/* Model search */}
-                  {modelOptions.length > 5 && (
+                  {providerModelCount > 5 && (
                     <div className="relative mb-2">
                       <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                       <input
                         type="text"
                         value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
+                        onChange={(e) => store.setSearch(e.target.value)}
                         placeholder={t("settings.searchModels")}
                         className="w-full rounded-lg border border-border bg-accent pl-8 pr-3 py-1.5 text-sm text-foreground placeholder-muted-foreground focus:border-indigo-500 focus:outline-none"
                       />
@@ -459,7 +299,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                       <button
                         key={m.id}
                         type="button"
-                        onClick={() => setModel(m.id)}
+                        onClick={() => store.selectModel(m.id)}
                         className={`w-full rounded-lg border p-2.5 text-left text-sm transition-all ${
                           model === m.id
                             ? "border-indigo-500 bg-indigo-500/15 text-foreground"
@@ -505,7 +345,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                 <input
                   type={showKey ? "text" : "password"}
                   value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
+                  onChange={(e) => store.setApiKey(e.target.value)}
                   placeholder={t("settings.apiKeyPlaceholder")}
                   className="w-full rounded-lg border border-border bg-accent px-3 py-2 pr-10 text-sm text-foreground placeholder-muted-foreground focus:border-indigo-500 focus:outline-none"
                 />
@@ -522,8 +362,20 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
                 </button>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                {t("settings.cookieStorageInfo")}
+                {t("settings.keyStorageInfo")}
               </p>
+              <label className="mt-2 flex cursor-pointer items-start gap-2">
+                <input
+                  type="checkbox"
+                  checked={rememberKey}
+                  onChange={(e) => store.setRememberKey(e.target.checked)}
+                  className="mt-0.5 rounded border-border"
+                />
+                <span>
+                  <span className="block text-sm text-foreground">{t("settings.rememberKey")}</span>
+                  <span className="block text-xs text-muted-foreground">{t("settings.rememberKeyHint")}</span>
+                </span>
+              </label>
             </div>
 
             {/* Language */}
@@ -534,25 +386,12 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
               </label>
               <select
                 value={language}
-                onChange={(e) => setLanguage(e.target.value)}
+                onChange={(e) => store.setLanguage(e.target.value)}
                 className="w-full rounded-lg border border-border bg-accent px-3 py-2 text-sm text-foreground focus:outline-none"
               >
-                <option value="English">English</option>
-                <option value="French">Français</option>
-                <option value="Spanish">Español</option>
-                <option value="German">Deutsch</option>
-                <option value="Italian">Italiano</option>
-                <option value="Portuguese">Português</option>
-                <option value="Dutch">Nederlands</option>
-                <option value="Russian">Русский</option>
-                <option value="Chinese">中文</option>
-                <option value="Japanese">日本語</option>
-                <option value="Korean">한국어</option>
-                <option value="Arabic">العربية</option>
-                <option value="Hindi">हिन्दी</option>
-                <option value="Turkish">Türkçe</option>
-                <option value="Polish">Polski</option>
-                <option value="Swedish">Svenska</option>
+                {RESPONSE_LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>{l.label}</option>
+                ))}
               </select>
               <p className="mt-1 text-xs text-muted-foreground">
                 {t("settings.languageHint")}
@@ -561,7 +400,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
           </div>
 
           {/* Footer */}
-          <div className="flex gap-3 border-t border-border px-6 py-4">
+          <div className="flex shrink-0 gap-3 border-t border-border px-6 py-4">
             <button
               onClick={handleClear}
               className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-accent"
@@ -571,10 +410,10 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
             <div className="flex-1" />
             <button
               onClick={handleTestConnection}
-              disabled={isTesting}
+              disabled={state.testing}
               className="flex items-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-accent disabled:opacity-50"
             >
-              {isTesting ? (
+              {state.testing ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Zap className="h-4 w-4" />
@@ -589,11 +428,7 @@ export function APIKeySettings({ onClose }: APIKeySettingsProps) {
             </button>
             <button
               onClick={handleSave}
-              disabled={
-                useCustomEndpoint
-                  ? !customEndpoint.trim() || !customModel.trim()
-                  : !apiKey.trim()
-              }
+              disabled={!state.canSave}
               className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
             >
               {t("common.save")}

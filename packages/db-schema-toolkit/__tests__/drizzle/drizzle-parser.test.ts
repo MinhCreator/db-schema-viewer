@@ -479,6 +479,124 @@ export const data = pgTable('data', {
     expect(fields.find((f) => f.name === "name")?.type).toBe("TEXT");
     expect(fields.find((f) => f.name === "active")?.type).toBe("BOOLEAN");
     expect(fields.find((f) => f.name === "meta")?.type).toBe("JSONB");
-    expect(fields.find((f) => f.name === "createdAt")?.type).toBe("TIMESTAMP");
+    expect(fields.find((f) => f.name === "created_at")?.type).toBe("TIMESTAMP");
+  });
+});
+
+describe("parseDrizzleSchema — modifier chains", () => {
+  it("reads modifiers after .$defaultFn(() => x()) in object syntax", () => {
+    const content = `
+import { pgTable, text } from 'drizzle-orm/pg-core';
+export const users = pgTable('users', {
+  id: text('id').$defaultFn(() => createId()).primaryKey(),
+  name: text('name').notNull(),
+});
+    `;
+    const fields = parseDrizzleSchema(content).tables[0]!.fields;
+    const id = fields.find((f) => f.name === "id");
+    expect(id?.primaryKey).toBe(true);
+    expect(id?.nullable).toBe(false);
+    expect(fields.find((f) => f.name === "name")?.nullable).toBe(false);
+  });
+
+  it("reads modifiers after .default(sql`now()`) in object syntax", () => {
+    const content = `
+import { pgTable, serial, timestamp } from 'drizzle-orm/pg-core';
+export const events = pgTable('events', {
+  id: serial('id').primaryKey(),
+  createdAt: timestamp('created_at').default(sql\`now()\`).notNull(),
+});
+    `;
+    const fields = parseDrizzleSchema(content).tables[0]!.fields;
+    expect(fields.find((f) => f.name === "created_at")?.nullable).toBe(false);
+  });
+
+  it("ignores parentheses inside string literals of a modifier", () => {
+    const content = `
+import { pgTable, serial, text } from 'drizzle-orm/pg-core';
+export const notes = pgTable('notes', {
+  id: serial('id').primaryKey(),
+  label: text('label').default('a)b').notNull(),
+});
+    `;
+    const label = parseDrizzleSchema(content).tables[0]!.fields.find((f) => f.name === "label");
+    expect(label?.default).toBe("a)b");
+    expect(label?.nullable).toBe(false);
+  });
+
+  it("accepts an options object in .references() in object syntax", () => {
+    const content = `
+import { pgTable, serial, integer } from 'drizzle-orm/pg-core';
+export const users = pgTable('users', {
+  id: serial('id').primaryKey(),
+});
+export const posts = pgTable('posts', {
+  id: serial('id').primaryKey(),
+  authorId: integer('author_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+});
+    `;
+    const diagram = parseDrizzleSchema(content);
+    expect(diagram.relationships).toHaveLength(1);
+    const authorId = diagram.tables
+      .find((t) => t.name === "posts")!
+      .fields.find((f) => f.name === "author_id");
+    expect(authorId?.isForeignKey).toBe(true);
+    expect(authorId?.references).toEqual({ table: "users", field: "id" });
+    expect(authorId?.nullable).toBe(false);
+  });
+
+  it("accepts an options object in .references() in callback syntax", () => {
+    const content = `
+import { pgTableCreator } from 'drizzle-orm/pg-core';
+const createTable = pgTableCreator((name) => name);
+export const users = createTable('users', (d) => ({
+  id: d.serial().primaryKey(),
+}));
+export const posts = createTable('posts', (d) => ({
+  id: d.serial().primaryKey(),
+  authorId: d.integer().references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  createdAt: d.timestamp().$defaultFn(() => new Date()).notNull(),
+}));
+    `;
+    const diagram = parseDrizzleSchema(content);
+    expect(diagram.relationships).toHaveLength(1);
+    const fields = diagram.tables.find((t) => t.name === "posts")!.fields;
+    expect(fields.find((f) => f.name === "authorId")?.references).toEqual({ table: "users", field: "id" });
+    expect(fields.find((f) => f.name === "authorId")?.nullable).toBe(false);
+    expect(fields.find((f) => f.name === "createdAt")?.nullable).toBe(false);
+  });
+
+  it("uses the SQL column name from the type call, not the TypeScript key", () => {
+    const diagram = parseDrizzleSchema(`
+      import { pgTable, serial, integer, timestamp, index, primaryKey } from "drizzle-orm/pg-core";
+      import { relations } from "drizzle-orm";
+
+      export const users = pgTable("users", {
+        userId: serial("user_id").primaryKey(),
+        createdAt: timestamp("created_at").defaultNow().notNull(),
+      });
+
+      export const posts = pgTable("posts", {
+        id: serial("id").primaryKey(),
+        authorId: integer("author_id").references(() => users.userId),
+        editorId: integer("editor_id"),
+      }, (table) => [index("posts_author_idx").on(table.authorId)]);
+
+      export const postsRelations = relations(posts, ({ one }) => ({
+        editor: one(users, { fields: [posts.editorId], references: [users.userId] }),
+      }));
+    `);
+    const users = diagram.tables.find((t) => t.name === "users")!;
+    const posts = diagram.tables.find((t) => t.name === "posts")!;
+    expect(users.fields.map((f) => f.name)).toEqual(["user_id", "created_at"]);
+    expect(posts.fields.map((f) => f.name)).toEqual(["id", "author_id", "editor_id"]);
+    expect(posts.indexes[0]?.columns).toEqual(["author_id"]);
+    expect(posts.fields.find((f) => f.name === "author_id")!.references).toEqual({ table: "users", field: "user_id" });
+    const links = diagram.relationships.map((r) => {
+      const source = diagram.tables.find((t) => t.id === r.sourceTableId)!;
+      const target = diagram.tables.find((t) => t.id === r.targetTableId)!;
+      return `${source.fields.find((f) => f.id === r.sourceFieldId)!.name}->${target.fields.find((f) => f.id === r.targetFieldId)!.name}`;
+    }).sort();
+    expect(links).toEqual(["author_id->user_id", "editor_id->user_id"]);
   });
 });

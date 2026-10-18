@@ -109,9 +109,10 @@ export function exportDiagramToMarkdown(diagram: Diagram, labels?: Partial<Markd
   if (diagram.relationships.length > 0) {
     lines.push(`## ${l.relationships}`);
     lines.push("");
+    const tablesById = new Map(diagram.tables.map((t) => [t.id, t]));
     for (const rel of diagram.relationships) {
-      const srcTable = diagram.tables.find((t) => t.id === rel.sourceTableId);
-      const tgtTable = diagram.tables.find((t) => t.id === rel.targetTableId);
+      const srcTable = tablesById.get(rel.sourceTableId);
+      const tgtTable = tablesById.get(rel.targetTableId);
       const srcField = srcTable?.fields.find((f) => f.id === rel.sourceFieldId);
       const tgtField = tgtTable?.fields.find((f) => f.id === rel.targetFieldId);
       if (srcTable && tgtTable && srcField && tgtField) {

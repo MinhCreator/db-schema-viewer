@@ -519,4 +519,53 @@ describe("parseMikroORMSchema", () => {
     expect(post.fields.find((f) => f.name === "title")).toBeDefined();
     expect(post.fields.find((f) => f.name === "createdAt")).toBeDefined();
   });
+
+  it("keeps entities with other decorators between @Entity and class", () => {
+    const content = `
+      @Entity({ tableName: "users" })
+      @Unique({ properties: ["email"] })
+      export class User {
+        @PrimaryKey()
+        id!: number;
+
+        @Property()
+        email!: string;
+      }
+
+      @Entity()
+      @Filter({ name: "active", cond: { active: true } })
+      export default class Post {
+        @PrimaryKey()
+        id!: number;
+
+        @Property()
+        title!: string;
+      }
+    `;
+    const diagram = parseMikroORMSchema(content);
+
+    expect(diagram.tables.map((t) => t.name).sort()).toEqual(["Post", "users"]);
+  });
+
+  it("parses properties declared without semicolons", () => {
+    const content = `
+      @Entity()
+      export class Account {
+        @PrimaryKey()
+        id!: number
+
+        @Property({ nullable: true })
+        nickname?: string
+
+        @Property()
+        active!: boolean
+      }
+    `;
+    const diagram = parseMikroORMSchema(content);
+    const account = diagram.tables[0]!;
+
+    expect(account.fields.map((f) => f.name)).toEqual(["id", "nickname", "active"]);
+    expect(account.fields.find((f) => f.name === "nickname")!.nullable).toBe(true);
+    expect(account.fields.find((f) => f.name === "active")!.type).toBe("BOOLEAN");
+  });
 });

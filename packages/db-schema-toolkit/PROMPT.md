@@ -10,21 +10,23 @@ You have access to the `db-schema-toolkit` CLI via `npx db-schema-toolkit` (or `
 
 ### What it does
 
-Parses database schema files (SQL, Drizzle, Prisma, DBML, TypeORM, MikroORM, Sequelize, Kysely) and can export them to other formats, analyze quality, or diff two versions.
+Parses database schema files (SQL, Drizzle, Prisma, DBML, TypeORM, MikroORM, Sequelize, Kysely) and can export them to other formats, analyze quality, diff two versions, summarize them, generate fake data, or build a shareable viewer link. Requires Node.js 20+.
 
 ### Commands
 
 ```
 db-schema-toolkit export <file> -f <format> [-o <output>] [-d <db-type>]
-db-schema-toolkit analyze <file> [--json] [--fail-under <score>]
-db-schema-toolkit diff <file1> <file2> [--json]
-db-schema-toolkit parse <file>
-db-schema-toolkit info <file> [--json]
-db-schema-toolkit generate <file> [--rows <n>] [--seed <n>]
+db-schema-toolkit analyze <file> [--json] [-o <output>] [--fail-under <score>]
+db-schema-toolkit diff <file1> <file2> [--json] [-o <output>]
+db-schema-toolkit parse <file> [-o <output>]
+db-schema-toolkit info <file> [--json] [-o <output>]
+db-schema-toolkit generate <file> [--rows <n>] [--seed <n>] [-o <output>]
 db-schema-toolkit share <file>
+db-schema-toolkit version
+db-schema-toolkit help [--llm]
 ```
 
-Use `-` as filename to read from stdin (with `--filename` to hint format detection).
+Use `-` as filename to read from stdin (with `--filename <name>` to hint format detection). Add `--no-color` (or set `NO_COLOR`) for plain output.
 
 ### Export formats
 
@@ -60,6 +62,7 @@ npx db-schema-toolkit share schema.prisma
 
 # Read from stdin
 cat schema.sql | npx db-schema-toolkit parse -
+cat schema.prisma | npx db-schema-toolkit info - --filename schema.prisma --json
 
 # Compare two versions of a schema
 npx db-schema-toolkit diff old.sql new.sql
@@ -74,11 +77,11 @@ The input format is detected automatically:
 - `.sql` → SQL (dialect auto-detected from content)
 - `.prisma` → Prisma
 - `.dbml` → DBML
-- `.ts` with `drizzle-orm` imports → Drizzle
-- `.ts` with `@Entity` → TypeORM
-- `.ts` with `@mikro-orm` → MikroORM
-- `.ts`/`.js` with `sequelize.define` → Sequelize
-- `.ts` with `kysely` → Kysely
+- `.ts` with `@Entity` + `@Property`/`@PrimaryKey` → MikroORM
+- `.ts` with `@Entity`/`@Column` → TypeORM
+- `.ts`/`.js` with `sequelize.define` or `Model.init` + `DataTypes` → Sequelize
+- `.ts` with a `Database` interface/type and `Generated<` → Kysely
+- `.ts` with `drizzle-orm` imports or `pgTable`/`mysqlTable`/`sqliteTable` → Drizzle
 
 ### Output to stdout or file
 

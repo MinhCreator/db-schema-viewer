@@ -318,4 +318,150 @@ model Post {
     const postsField = user.fields.find((f) => f.name === "posts");
     expect(postsField).toBeUndefined();
   });
+
+  it("keeps nested parentheses in @default values", () => {
+    const content = `
+model Event {
+  id        Int      @id @default(autoincrement())
+  uuid      String   @default(dbgenerated("gen_random_uuid()"))
+  label     String   @default("a (b) c")
+  createdAt DateTime @default(now()) @map("created_at")
+}
+    `;
+    const fields = parsePrismaSchema(content).tables[0]!.fields;
+    expect(fields.find((f) => f.name === "id")?.default).toBe("autoincrement()");
+    expect(fields.find((f) => f.name === "uuid")?.default).toBe(
+      'dbgenerated("gen_random_uuid()")',
+    );
+    expect(fields.find((f) => f.name === "label")?.default).toBe('"a (b) c"');
+    expect(fields.find((f) => f.name === "created_at")?.default).toBe("now()");
+  });
+
+  it("reads @relation arguments in any order, with name, map and actions", () => {
+    const content = `
+model User {
+  id    Int    @id
+  email String @unique
+  posts Post[] @relation("owner")
+}
+
+model Post {
+  id         Int    @id
+  ownerId    Int
+  owner      User   @relation("owner", references: [id], fields: [ownerId], onDelete: Cascade)
+  editorMail String
+  editor     User   @relation(name: "editor", map: "fk_editor", fields: [editorMail], references: [email], onUpdate: NoAction)
+}
+    `;
+    const diagram = parsePrismaSchema(content);
+    expect(diagram.relationships).toHaveLength(2);
+
+    const post = diagram.tables.find((t) => t.name === "Post")!;
+    expect(post.fields.find((f) => f.name === "ownerId")?.references).toEqual({
+      table: "User",
+      field: "id",
+    });
+    expect(post.fields.find((f) => f.name === "editorMail")?.references).toEqual({
+      table: "User",
+      field: "email",
+    });
+    expect(post.fields.find((f) => f.name === "owner")).toBeUndefined();
+    expect(post.fields.find((f) => f.name === "editor")).toBeUndefined();
+  });
+
+  it("prefers @relation targets over the xxxId naming convention", () => {
+    const content = `
+model User {
+  id Int @id
+}
+
+model Account {
+  id Int @id
+}
+
+model Post {
+  id      Int     @id
+  userId  Int
+  account Account @relation(fields: [userId], references: [id])
+}
+    `;
+    const diagram = parsePrismaSchema(content);
+    expect(diagram.relationships).toHaveLength(1);
+
+    const post = diagram.tables.find((t) => t.name === "Post")!;
+    expect(post.fields.find((f) => f.name === "userId")?.references).toEqual({
+      table: "Account",
+      field: "id",
+    });
+  });
+
+  it("maps composite @relation fields pairwise", () => {
+    const content = `
+model Tenant {
+  orgId  Int
+  userId Int
+
+  @@id([orgId, userId])
+}
+
+model Membership {
+  id        Int    @id
+  tOrg      Int
+  tUser     Int
+  tenant    Tenant @relation(fields: [tOrg, tUser], references: [orgId, userId])
+}
+    `;
+    const diagram = parsePrismaSchema(content);
+    const membership = diagram.tables.find((t) => t.name === "Membership")!;
+    expect(membership.fields.find((f) => f.name === "tOrg")?.references).toEqual({
+      table: "Tenant",
+      field: "orgId",
+    });
+    expect(membership.fields.find((f) => f.name === "tUser")?.references).toEqual({
+      table: "Tenant",
+      field: "userId",
+    });
+  });
+
+  it("skips singular back-relation fields (e.g., profile Profile?)", () => {
+    const content = `
+model User {
+  id      Int      @id
+  profile Profile?
+  manager User?    @relation("managed")
+}
+
+model Profile {
+  id     Int  @id
+  userId Int  @unique
+  user   User @relation(fields: [userId], references: [id])
+}
+    `;
+    const diagram = parsePrismaSchema(content);
+    const user = diagram.tables.find((t) => t.name === "User")!;
+    expect(user.fields.map((f) => f.name)).toEqual(["id"]);
+
+    expect(diagram.relationships).toHaveLength(1);
+    expect(diagram.relationships[0]!.cardinality).toBe("one-to-one");
+  });
+
+  it("still applies the xxxId convention when no @relation covers the field", () => {
+    const content = `
+model User {
+  id Int @id
+}
+
+model Post {
+  id     Int @id
+  userId Int
+}
+    `;
+    const diagram = parsePrismaSchema(content);
+    expect(diagram.relationships).toHaveLength(1);
+    const post = diagram.tables.find((t) => t.name === "Post")!;
+    expect(post.fields.find((f) => f.name === "userId")?.references).toEqual({
+      table: "User",
+      field: "id",
+    });
+  });
 });

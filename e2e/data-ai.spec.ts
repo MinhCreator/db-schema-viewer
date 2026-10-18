@@ -42,6 +42,7 @@ test("AI streams a mocked response and retains conversation when reopened", asyn
   await context.addCookies([
     { name: "db-sv-api-key", value: "test-key", url: baseURL! },
     { name: "db-sv-custom-endpoint", value: encodeURIComponent(new URL("/v1", baseURL).href), url: baseURL! },
+    { name: "db-sv-custom-model", value: "test-model", url: baseURL! },
   ]);
   await page.route("**/v1/chat/completions", async (route) => {
     await route.fulfill({ contentType: "text/event-stream", body:
@@ -63,6 +64,7 @@ test("AI challenge renders and exports a mocked structured review", async ({ pag
   await context.addCookies([
     { name: "db-sv-api-key", value: "test-key", url: baseURL! },
     { name: "db-sv-custom-endpoint", value: encodeURIComponent(new URL("/v1", baseURL).href), url: baseURL! },
+    { name: "db-sv-custom-model", value: "test-model", url: baseURL! },
   ]);
   const review = { overallScore: 88, summary: "Review completed", issues: [{ severity: "warning", category: "indexing", table: "users", description: "Consider an index on name", suggestion: "Measure query plans" }] };
   await page.route("**/v1/chat/completions", (route) => route.fulfill({ json: {
@@ -87,7 +89,9 @@ test("schema comparison loads through the worker and shows added tables", async 
   await expect(page.getByRole("heading", { name: "Schema Diff", exact: true })).toBeVisible();
   await page.locator('input[type="file"]').setInputFiles({ name: "new.sql", mimeType: "text/plain", buffer: Buffer.from("CREATE TABLE users(id INT PRIMARY KEY, name TEXT, amount INT); CREATE TABLE orders(id INT PRIMARY KEY);") });
   await expect(page.getByText("orders", { exact: true })).toBeVisible();
-  await expect(page.getByText(/Added Tables/)).toBeVisible();
+  const diffDialog = page.getByRole("dialog", { name: "Schema Diff" });
+  await expect(diffDialog.getByText("Added Tables", { exact: true })).toBeVisible();
+  await expect(diffDialog.getByText("Added Tables: 1", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator(".react-flow__node-table")).toHaveCount(1);
 });
