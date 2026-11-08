@@ -1,3 +1,32 @@
+## [3.0.1](https://github.com/maxgfr/db-schema-viewer/compare/v3.0.0...v3.0.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* Next.js 16.4 and audit fixes, delete a diagram's challenge history with it ([#26](https://github.com/maxgfr/db-schema-viewer/issues/26)) ([672d26c](https://github.com/maxgfr/db-schema-viewer/commit/672d26c0374e371607df70c548c7ee3505bdbc09))
+
+# [3.0.0](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.6...v3.0.0) (2026-11-02)
+
+
+### Bug Fixes
+
+* **storage:** keep projects in IndexedDB and name all storage after the app ([#25](https://github.com/maxgfr/db-schema-viewer/issues/25)) ([85f391d](https://github.com/maxgfr/db-schema-viewer/commit/85f391d0268d79c48c504a87b0a3fe4cee7aa608))
+
+
+### BREAKING CHANGES
+
+* **storage:** for db-schema-toolkit's peers), so a save is read back,
+  key included, and the dialog says when the settings only last for the page
+  (all eight locales).
+
+* test(settings): mock the kept-settings check and cover the storage-full warning
+
+* fix(settings): free the old db-sv-ai-settings entry before writing the new one
+
+With localStorage nearly full, the renamed copy might not fit beside the old
+one. Remove the old preferences first, put them back if the new copy does
+not read back, and retry on the next load.
+
 ## [2.1.6](https://github.com/maxgfr/db-schema-viewer/compare/v2.1.5...v2.1.6) (2026-10-17)
 
 
